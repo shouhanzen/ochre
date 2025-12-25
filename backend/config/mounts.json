@@ -1,0 +1,11 @@
+{
+  "mounts": [
+    {
+      "name": "workspace",
+      "path": "../..",
+      "readOnly": false
+    }
+  ]
+}
+
+

@@ -1,0 +1,24 @@
+[project]
+name = "ochre-backend"
+version = "0.1.0"
+description = "Ochre backend: OpenRouter chat agent + mounted filesystem tools + todo VFS."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.8.0",
+  "python-dotenv>=1.0.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+  "ruff>=0.6.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+
+

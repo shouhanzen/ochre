@@ -100,8 +100,8 @@ class KanbanNotionProvider:
                 if st == status_name:
                     entries.append(
                         {
-                            "name": f"{c['id']}.md",
-                            "path": f"/fs/kanban/notion/boards/{board_id}/status/{status_seg}/{c['id']}.md",
+                            "name": f"{c['id']}.task.md",
+                            "path": f"/fs/kanban/notion/boards/{board_id}/status/{status_seg}/{c['id']}.task.md",
                             "kind": "file",
                             "size": None,
                         }
@@ -143,14 +143,14 @@ class KanbanNotionProvider:
             boards = {b["id"]: b for b in list_boards()}
             return {"path": path, "content": json.dumps({"board": boards.get(board_id)}, ensure_ascii=False, indent=2)}
 
-        if "/cards/" in path and path.endswith(".md"):
+        if "/cards/" in path and (path.endswith(".md") or path.endswith(".task.md")):
             # legacy path removed
-            raise RuntimeError("Card path has moved; use /status/<status>/<cardId>.md")
+            raise RuntimeError("Card path has moved; use /status/<status>/<cardId>.task.md")
 
-        if "/status/" in path and path.endswith(".md"):
+        if "/status/" in path and path.endswith(".task.md"):
             parts = path.split("/")
             board_id = parts[5]
-            card_id = parts[-1].replace(".md", "")
+            card_id = parts[-1].replace(".task.md", "")
             ov = get_overlay(card_id)
             if ov and ov.get("content_md"):
                 return {"path": path, "content": ov["content_md"]}
@@ -175,10 +175,10 @@ class KanbanNotionProvider:
         raise RuntimeError("Unknown Notion kanban file")
 
     def write(self, path: str, *, content: str) -> dict[str, Any]:
-        if "/status/" in path and path.endswith(".md"):
+        if "/status/" in path and path.endswith(".task.md"):
             parts = path.split("/")
             board_id = parts[5]
-            card_id = parts[-1].replace(".md", "")
+            card_id = parts[-1].replace(".task.md", "")
             upsert_overlay(board_id=board_id, card_id=card_id, content_md=content)
             return {"path": path, "ok": True, "overlay": True}
         raise RuntimeError("Writes only supported for card markdown docs")
@@ -187,7 +187,12 @@ class KanbanNotionProvider:
         """
         Interpret moving a card between status folders as a status change overlay update.
         """
-        if not ("/status/" in from_path and from_path.endswith(".md") and "/status/" in to_path and to_path.endswith(".md")):
+        if not (
+            "/status/" in from_path
+            and from_path.endswith(".task.md")
+            and "/status/" in to_path
+            and to_path.endswith(".task.md")
+        ):
             raise RuntimeError("Notion move only supported for status folder card moves")
 
         fp = from_path.split("/")
@@ -198,8 +203,8 @@ class KanbanNotionProvider:
             raise RuntimeError("Cannot move card across boards")
         from_status = unquote(fp[7])
         to_status = unquote(tp[7])
-        card_id = fp[-1].replace(".md", "")
-        to_card_id = tp[-1].replace(".md", "")
+        card_id = fp[-1].replace(".task.md", "")
+        to_card_id = tp[-1].replace(".task.md", "")
         if card_id != to_card_id:
             raise RuntimeError("Renaming cards not supported (cardId mismatch)")
         if from_status == to_status:

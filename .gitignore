@@ -24,6 +24,8 @@ backend/data/*.db
 backend/data/*.sqlite
 backend/data/*.sqlite3
 backend/data/todos/*.json
+backend/data/logs/
+backend/data/logs/*.ndjson
 
 # OS / editors
 .DS_Store

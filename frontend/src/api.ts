@@ -45,6 +45,13 @@ export async function fsWrite(path: string, content: string): Promise<void> {
   })
 }
 
+export async function fsMove(fromPath: string, toPath: string): Promise<void> {
+  await jsonFetch(`/api/fs/move`, {
+    method: 'POST',
+    body: JSON.stringify({ fromPath, toPath }),
+  })
+}
+
 export async function getTodayTodos(): Promise<{ day: string; tasks: Task[] }> {
   return await jsonFetch(`/api/todos/today`)
 }

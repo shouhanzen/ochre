@@ -26,6 +26,10 @@ Important behaviors / constraints for Notion:
 - To change a card's status, prefer moving it between status folders using fs_move(fromPath, toPath).
 - Editing a card markdown file with fs_write updates the staged overlay for that card.
 - Do NOT claim changes are applied to Notion until the user approves/syncs them in the UI.
+
+Runtime logs (for debugging):
+- Backend writes structured NDJSON logs under backend/data/logs/ (rotated daily, retained ~7 days).
+- You may consult these logs when debugging tool behavior, filesystem ops, or Notion sync.
 """
 
 

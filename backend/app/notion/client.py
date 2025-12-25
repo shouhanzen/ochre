@@ -58,4 +58,36 @@ class NotionClient:
                 raise NotionError(f"Notion error {r.status_code}: {r.text}")
             return r.json()
 
+    async def list_block_children(self, block_id: str, *, start_cursor: Optional[str] = None) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        if start_cursor:
+            params["start_cursor"] = start_cursor
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            r = await client.get(
+                f"{NOTION_BASE_URL}/blocks/{block_id}/children",
+                headers=self._headers,
+                params=params,
+            )
+            if r.status_code >= 400:
+                raise NotionError(f"Notion error {r.status_code}: {r.text}")
+            return r.json()
+
+    async def append_block_children(self, block_id: str, *, children: list[dict[str, Any]]) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            r = await client.patch(
+                f"{NOTION_BASE_URL}/blocks/{block_id}/children",
+                headers=self._headers,
+                json={"children": children},
+            )
+            if r.status_code >= 400:
+                raise NotionError(f"Notion error {r.status_code}: {r.text}")
+            return r.json()
+
+    async def delete_block(self, block_id: str) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            r = await client.delete(f"{NOTION_BASE_URL}/blocks/{block_id}", headers=self._headers)
+            if r.status_code >= 400:
+                raise NotionError(f"Notion error {r.status_code}: {r.text}")
+            return r.json()
+
 

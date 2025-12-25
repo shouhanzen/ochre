@@ -10,6 +10,7 @@ from app.api.settings import DEFAULT_MODEL_FALLBACK, DEFAULT_MODEL_KEY
 from app.sessions.store import add_message, get_session, messages_for_llm, update_message_content
 from app.settings.store import get_setting
 from app.ws.hub import register, send, unregister
+from app.logging.ndjson import log_event
 
 
 router = APIRouter()
@@ -61,6 +62,13 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
                 continue
 
             async with st.lock:
+                log_event(
+                    level="info",
+                    event="ws.chat.send",
+                    sessionId=session_id,
+                    requestId=str(request_id or ""),
+                    data={"contentLen": len(content)},
+                )
                 # cancel any inflight
                 if st.task and not st.task.done():
                     st.cancel_event.set()
@@ -82,6 +90,13 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
                         content="Generation cancelled (new user message).",
                         meta={"type": "cancel"},
                     )
+                    log_event(
+                        level="info",
+                        event="ws.chat.cancel",
+                        sessionId=session_id,
+                        requestId=str(request_id or ""),
+                        data={"reason": "new_message"},
+                    )
                     await send(
                         session_id,
                         {"type": "chat.cancelled", "requestId": request_id, "payload": {"reason": "new_message"}},
@@ -99,6 +114,13 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
                 st.assistant_message_id = assistant_row.id
 
                 await ws.send_json({"type": "chat.started", "requestId": request_id, "payload": {"messageId": assistant_row.id}})
+                log_event(
+                    level="info",
+                    event="ws.chat.started",
+                    sessionId=session_id,
+                    requestId=str(request_id or ""),
+                    data={"messageId": assistant_row.id, "model": model},
+                )
 
                 model = get_setting(DEFAULT_MODEL_KEY, DEFAULT_MODEL_FALLBACK) or DEFAULT_MODEL_FALLBACK
 
@@ -108,6 +130,15 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
 
                         def on_event(ev: dict[str, Any]) -> None:
                             # ev is like {type:'chat.delta', payload:{text}}
+                            et = str(ev.get("type") or "")
+                            if et and et != "chat.delta":
+                                log_event(
+                                    level="info",
+                                    event=f"agent.event.{et}",
+                                    sessionId=session_id,
+                                    requestId=str(request_id or ""),
+                                    data=ev.get("payload") if isinstance(ev.get("payload"), dict) else {"payload": ev.get("payload")},
+                                )
                             asyncio.create_task(send(session_id, {"type": ev["type"], "requestId": request_id, "payload": ev.get("payload", {})}))
 
                         text, full_msgs = await run_tool_loop_streaming(
@@ -139,6 +170,14 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
                                     content=m.get("content"),
                                     meta={"name": m.get("name"), "tool_call_id": m.get("tool_call_id")},
                                 )
+                                log_event(
+                                    level="info",
+                                    event="agent.tool.result",
+                                    sessionId=session_id,
+                                    requestId=str(request_id or ""),
+                                    toolCallId=str(m.get("tool_call_id") or ""),
+                                    data={"name": m.get("name"), "contentLen": len(str(m.get("content") or ""))},
+                                )
                             elif role == "assistant" and m.get("tool_calls"):
                                 add_message(
                                     session_id=session_id,
@@ -148,6 +187,13 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
                                 )
 
                         await send(session_id, {"type": "chat.done", "requestId": request_id, "payload": {"ok": True}})
+                        log_event(
+                            level="info",
+                            event="ws.chat.done",
+                            sessionId=session_id,
+                            requestId=str(request_id or ""),
+                            data={"ok": True, "assistantChars": len(st.assistant_text)},
+                        )
                     except asyncio.CancelledError:
                         # Persist partial and exit
                         if st.assistant_message_id is not None:
@@ -162,7 +208,21 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
                             content="Generation cancelled.",
                             meta={"type": "cancel"},
                         )
+                        log_event(
+                            level="info",
+                            event="ws.chat.cancel",
+                            sessionId=session_id,
+                            requestId=str(request_id or ""),
+                            data={"reason": "cancelled"},
+                        )
                     except Exception as e:  # noqa: BLE001
+                        log_event(
+                            level="error",
+                            event="ws.chat.error",
+                            sessionId=session_id,
+                            requestId=str(request_id or ""),
+                            data={"error": str(e)},
+                        )
                         await send(session_id, {"type": "chat.error", "requestId": request_id, "payload": {"message": str(e)}})
 
                 st.task = asyncio.create_task(run_generation())

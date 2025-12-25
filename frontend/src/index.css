@@ -310,6 +310,42 @@ body {
   border-radius: 0;
 }
 
+.taskCard {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  overflow: auto;
+}
+.taskCardGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+}
+.taskCardGrid .label {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+.taskCardGrid .input {
+  width: 100%;
+  max-width: none;
+}
+.taskBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.taskBody .editorArea {
+  border: 1px solid var(--vscode-border);
+  border-radius: 4px;
+  height: 100%;
+}
+
 /* Chat */
 .chatLog {
   flex: 1;

@@ -11,11 +11,26 @@ import { StatusBar } from './components/StatusBar'
 import { createSession } from './sessionApi'
 
 export default function App() {
-  const [selectedPath, setSelectedPath] = useState<string | undefined>('/fs/todos/today.md')
+  const STORAGE_KEY = 'ochre.selectedPath'
+  const [selectedPath, setSelectedPath] = useState<string | undefined>(() => {
+    try {
+      return localStorage.getItem(STORAGE_KEY) || '/fs/todos/today.md'
+    } catch {
+      return '/fs/todos/today.md'
+    }
+  })
   const [todoRefreshKey, setTodoRefreshKey] = useState(0)
   const [sessionId, setSessionId] = useState<string | undefined>(undefined)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [activeRail, setActiveRail] = useState<'explorer' | 'sessions' | 'chat' | 'kanban' | 'settings'>('explorer')
+
+  useEffect(() => {
+    try {
+      if (selectedPath) localStorage.setItem(STORAGE_KEY, selectedPath)
+    } catch {
+      // ignore
+    }
+  }, [selectedPath])
 
   useEffect(() => {
     if (sessionId) return
@@ -52,6 +67,7 @@ export default function App() {
         <div className="editorRegion">
           <Editor
             path={selectedPath}
+            onNavigate={(p) => setSelectedPath(p)}
             onSaved={(p) => {
               if (p.startsWith('/fs/todos/')) setTodoRefreshKey((k) => k + 1)
             }}

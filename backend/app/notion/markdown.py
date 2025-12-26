@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -20,16 +21,15 @@ class CardDoc:
 
 
 def render_card_doc(*, page_id: str, board_id: str, title: str, status: str | None, tags: list[str], body: str) -> str:
-    tags_part = "[" + ", ".join([f"\"{t.replace('\"', '\\\"')}\"" for t in tags]) + "]"
     lines = [
         "---",
-        f"pageId: \"{page_id}\"",
-        f"boardId: \"{board_id}\"",
-        f"title: \"{title.replace('\"', '\\\"')}\"",
+        f"pageId: {json.dumps(page_id)}",
+        f"boardId: {json.dumps(board_id)}",
+        f"title: {json.dumps(title)}",
     ]
     if status is not None:
-        lines.append(f"status: \"{status.replace('\"', '\\\"')}\"")
-    lines.append(f"tags: {tags_part}")
+        lines.append(f"status: {json.dumps(status)}")
+    lines.append(f"tags: {json.dumps(tags)}")
     lines.append("---")
     lines.append("")
     if body:

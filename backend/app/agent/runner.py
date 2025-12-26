@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from app.agent.openrouter import chat_completions
 from app.agent.prompt import ensure_system_prompt
+from app.agent.tool_errors import ToolStructuredError
 from app.agent.tool_dispatch import dispatch_tool_call
 from app.agent.toolspecs import tool_specs
 
@@ -59,6 +60,8 @@ async def run_agent(
             try:
                 result = await dispatch_tool_call(str(name), args if isinstance(args, dict) else {"args": args})
                 content = json.dumps({"ok": True, "result": result}, ensure_ascii=False)
+            except ToolStructuredError as e:
+                content = json.dumps(e.payload, ensure_ascii=False)
             except Exception as e:  # noqa: BLE001
                 content = json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
 

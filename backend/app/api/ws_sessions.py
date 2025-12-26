@@ -113,6 +113,8 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
                 assistant_row = add_message(session_id=session_id, role="assistant", content="", meta={"streaming": True})
                 st.assistant_message_id = assistant_row.id
 
+                model = get_setting(DEFAULT_MODEL_KEY, DEFAULT_MODEL_FALLBACK) or DEFAULT_MODEL_FALLBACK
+
                 await ws.send_json({"type": "chat.started", "requestId": request_id, "payload": {"messageId": assistant_row.id}})
                 log_event(
                     level="info",
@@ -121,8 +123,6 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
                     requestId=str(request_id or ""),
                     data={"messageId": assistant_row.id, "model": model},
                 )
-
-                model = get_setting(DEFAULT_MODEL_KEY, DEFAULT_MODEL_FALLBACK) or DEFAULT_MODEL_FALLBACK
 
                 async def run_generation() -> None:
                     try:

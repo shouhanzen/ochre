@@ -54,6 +54,63 @@ def tool_specs() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "fs_grep",
+                "description": "Recursively search for a string/regex under a unified filesystem directory (e.g. /fs, /fs/mnt/<mountName>, /fs/todos).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "dir": {"type": "string"},
+                        "query": {"type": "string"},
+                        "regex": {"type": "boolean"},
+                        "case_sensitive": {"type": "boolean"},
+                        "include_globs": {"type": "array", "items": {"type": "string"}},
+                        "exclude_globs": {"type": "array", "items": {"type": "string"}},
+                        "max_files": {"type": "integer"},
+                        "max_matches": {"type": "integer"},
+                        "max_file_bytes": {"type": "integer"},
+                        "context_before": {"type": "integer"},
+                        "context_after": {"type": "integer"},
+                    },
+                    "required": ["dir", "query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fs_patch",
+                "description": "Apply targeted, unambiguous edits to a UTF-8 text file in the unified filesystem. Rejects invalid/ambiguous edits and returns a capped unified diff.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "max_file_bytes": {"type": "integer"},
+                        "max_total_delta_bytes": {"type": "integer"},
+                        "diff_cap_bytes": {"type": "integer"},
+                        "edits": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "op": {"type": "string"},
+                                    "expected_matches": {"type": "integer"},
+                                    "old": {"type": "string"},
+                                    "new": {"type": "string"},
+                                    "anchor": {"type": "string"},
+                                    "insert": {"type": "string"},
+                                },
+                                "required": ["op", "expected_matches"],
+                            },
+                        },
+                    },
+                    "required": ["path", "edits"],
+                },
+            },
+        },
     ]
 
 

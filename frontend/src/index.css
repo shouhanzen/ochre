@@ -34,6 +34,92 @@ body {
   color: var(--vscode-foreground);
 }
 
+.mobileShell {
+  position: fixed;
+  inset: 0;
+  height: var(--ochre-vh, 100dvh);
+  width: var(--ochre-vw, 100vw);
+  transform: translate3d(var(--ochre-vv-left, 0px), var(--ochre-vv-top, 0px), 0);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+.mobileTopBar {
+  padding-top: env(safe-area-inset-top);
+}
+.mobileSubtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobileMain {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.mobileShell.keyboardOpen .mobileMain {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.mobileMain > .panel {
+  flex: 1;
+  min-height: 0;
+}
+.mobileShell input,
+.mobileShell textarea,
+.mobileShell select {
+  font-size: 16px;
+}
+.mobileBrowse {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  box-sizing: border-box;
+}
+.mobileBrowseToggle {
+  display: flex;
+  gap: 10px;
+}
+.mobileBrowseToggle .button {
+  flex: 1;
+}
+
+.mobileTabBar {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0;
+  border-top: 1px solid var(--vscode-border);
+  background: var(--vscode-sideBar-background);
+  padding: 6px 6px calc(6px + env(safe-area-inset-bottom)) 6px;
+}
+.mobileTabButton {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-foreground-muted);
+  padding: 8px 6px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  cursor: pointer;
+  min-height: 44px;
+}
+.mobileTabButton.active {
+  color: var(--vscode-foreground);
+  background: rgba(255, 255, 255, 0.06);
+}
+.mobileTabIcon {
+  font-size: 16px;
+  line-height: 1;
+}
+.mobileTabLabel {
+  font-size: 11px;
+  line-height: 1;
+}
+
 .appShell {
   height: 100%;
   display: flex;

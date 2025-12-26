@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from app.agent.openrouter import chat_completions_stream
+from app.agent.tool_errors import ToolStructuredError
 from app.agent.tool_dispatch import dispatch_tool_call
 from app.agent.toolspecs import tool_specs
 
@@ -115,6 +116,9 @@ async def run_tool_loop_streaming(
                 try:
                     tool_res = await dispatch_tool_call(name, args if isinstance(args, dict) else {"args": args})
                     content = json.dumps({"ok": True, "result": tool_res}, ensure_ascii=False)
+                except ToolStructuredError as e:
+                    ok = False
+                    content = json.dumps(e.payload, ensure_ascii=False)
                 except Exception as e:  # noqa: BLE001
                     ok = False
                     content = json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)

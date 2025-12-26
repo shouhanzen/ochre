@@ -17,6 +17,7 @@ backend/.venv/
 # Node / Frontend
 **/node_modules/
 frontend/dist/
+frontend/dev-dist/
 
 # Local data (SQLite + generated todo history)
 backend/data/ochre.db

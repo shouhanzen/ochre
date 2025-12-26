@@ -33,6 +33,28 @@ type ToolPill = {
   rawLines: string[]
 }
 
+function makeUuidV4FromRandomBytes(bytes: Uint8Array): string {
+  // RFC 4122 version 4 + variant bits
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function safeRandomUUID(): { id: string; method: 'randomUUID' | 'getRandomValues' | 'fallback' } {
+  const c = (globalThis as any).crypto as Crypto | undefined
+  if (c && typeof (c as any).randomUUID === 'function') {
+    return { id: (c as any).randomUUID(), method: 'randomUUID' }
+  }
+  if (c && typeof c.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16)
+    c.getRandomValues(bytes)
+    return { id: makeUuidV4FromRandomBytes(bytes), method: 'getRandomValues' }
+  }
+  // Last resort (not cryptographically strong): still unique enough for request correlation in UI.
+  return { id: `r-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`, method: 'fallback' }
+}
+
 function _safeJsonPreview(s: string): string | null {
   const t = s.trim()
   if (!t.startsWith('{') && !t.startsWith('[')) return null
@@ -40,7 +62,15 @@ function _safeJsonPreview(s: string): string | null {
     const obj = JSON.parse(t) as any
     if (obj && typeof obj === 'object') {
       if (typeof obj.ok === 'boolean') {
-        if (obj.ok === false) return String(obj.error ?? 'error')
+        if (obj.ok === false) {
+          const err = obj.error
+          if (typeof err === 'string') return err
+          if (err && typeof err === 'object') {
+            if (typeof err.message === 'string') return err.message
+            if (typeof err.code === 'string') return err.code
+          }
+          return 'error'
+        }
         if ('result' in obj) {
           const r = obj.result
           if (r == null) return 'ok'
@@ -287,7 +317,7 @@ export function ChatPanel(props: { sessionId?: string }) {
     setError(null)
     const userMsg: ChatMsg = { role: 'user', content: draft.trim(), ts: new Date().toISOString() }
     setDraft('')
-    const requestId = crypto.randomUUID()
+    const { id: requestId } = safeRandomUUID()
     activeRequestIdRef.current = requestId
     pendingIdxRef.current = null
     streamingAssistantIdxRef.current = null
@@ -305,6 +335,7 @@ export function ChatPanel(props: { sessionId?: string }) {
       </div>
 
       <div className="chatLog">
+        {!props.sessionId ? <div className="muted">Initializing session…</div> : null}
         {messages.length === 0 ? (
           <div className="muted">Ask the agent to view/edit `/fs/todos/today.md` or `/fs/mnt/workspace/...`.</div>
         ) : null}
@@ -371,7 +402,7 @@ export function ChatPanel(props: { sessionId?: string }) {
           className="textarea"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Send a message…"
+          placeholder={props.sessionId ? 'Send a message…' : 'Waiting for session…'}
           rows={3}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -379,8 +410,9 @@ export function ChatPanel(props: { sessionId?: string }) {
               void onSend()
             }
           }}
+          disabled={!props.sessionId}
         />
-        <button className="button" disabled={!canSend} onClick={onSend}>
+        <button className="button" disabled={!props.sessionId || !canSend} onClick={onSend}>
           {streaming ? 'Sending…' : 'Send'}
         </button>
       </div>

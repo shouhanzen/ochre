@@ -9,7 +9,7 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-export function SettingsModal(props: { open: boolean; onClose: () => void }) {
+export function SettingsModal(props: { open: boolean; onClose: () => void; onOpenDebug?: () => void }) {
   const [defaultModel, setDefaultModel] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -52,6 +52,11 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
         <div className="panelHeader">
           <div className="panelTitle">Settings</div>
           <div className="row">
+            {props.onOpenDebug ? (
+              <button className="button secondary" onClick={props.onOpenDebug}>
+                Debug
+              </button>
+            ) : null}
             <button className="button secondary" onClick={props.onClose}>
               Close
             </button>

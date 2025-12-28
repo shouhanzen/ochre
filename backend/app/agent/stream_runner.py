@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from app.agent.openrouter import chat_completions_stream
+from app.agent.prompt import ensure_system_prompt
 from app.agent.tool_errors import ToolStructuredError
 from app.agent.tool_dispatch import dispatch_tool_call
 from app.agent.toolspecs import tool_specs
@@ -79,7 +80,7 @@ async def run_tool_loop_streaming(
     - tool.start/tool.end
     Returns final assistant text and the full message list (including tool messages) for persistence.
     """
-    msgs = list(base_messages)
+    msgs = ensure_system_prompt(list(base_messages))
     accumulated_final: list[str] = []
 
     for _ in range(max_steps):

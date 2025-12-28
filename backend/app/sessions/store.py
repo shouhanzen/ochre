@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import uuid4
 
-from app.agent.prompt import ensure_system_prompt
 from app.db import connect
 
 
@@ -155,6 +154,6 @@ def messages_for_llm(session_id: str, *, limit: int = 200) -> list[dict[str, Any
             if k in m.meta:
                 d[k] = m.meta[k]
         out.append(d)
-    return ensure_system_prompt(out)
+    return out
 
 

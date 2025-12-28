@@ -125,6 +125,8 @@ async def run_tool_loop_streaming(
                     content = json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
                 ms = int((time.time() - t0) * 1000)
                 on_event({"type": "tool.end", "payload": {"tool": name, "ok": ok, "durationMs": ms}})
+                # Emit tool output as a separate transcript event (may be large).
+                on_event({"type": "tool.output", "payload": {"tool": name, "content": content}})
 
                 msgs.append({"role": "tool", "tool_call_id": tc_id, "name": name, "content": content})
 

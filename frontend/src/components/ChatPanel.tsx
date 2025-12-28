@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 type ChatMsg = {
+  id?: string
   role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   ts?: string
@@ -17,7 +18,11 @@ type ChatMsg = {
 function toChatMsgs(msgs: SessionMessage[]): ChatMsg[] {
   return msgs
     .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'system' || m.role === 'tool')
-    .map((m) => ({ role: m.role as any, content: m.content ?? '', ts: m.created_at, meta: m.meta ?? {} }))
+    .map((m) => {
+      const meta = (m.meta ?? {}) as any
+      const rid = typeof meta.requestId === 'string' ? meta.requestId : undefined
+      return { id: m.id, role: m.role as any, content: m.content ?? '', ts: m.created_at, meta: meta ?? {}, requestId: rid }
+    })
 }
 
 type RenderItem =
@@ -238,8 +243,46 @@ export function ChatPanel(props: { sessionId?: string }) {
     if (!sid) return
     const s = new SessionSocket(sid, (f: WsFrame) => {
       // Only process frames for the active request (or system messages).
-      if (f.type !== 'system.message') {
+      if (f.type !== 'system.message' && f.type !== 'snapshot') {
         if (activeRequestIdRef.current && f.requestId && f.requestId !== activeRequestIdRef.current) return
+      }
+
+      if (f.type === 'snapshot') {
+        const view: any = f.payload ?? {}
+        const msgs = Array.isArray(view.messages) ? view.messages : []
+        let chatMsgs = toChatMsgs(msgs)
+
+        const overlay = view?.overlays?.assistant
+        if (overlay && typeof overlay.messageId === 'string' && typeof overlay.content === 'string') {
+          const idx = chatMsgs.findIndex((m) => m.id === overlay.messageId)
+          if (idx >= 0) {
+            chatMsgs[idx] = { ...chatMsgs[idx], content: overlay.content }
+          } else if (overlay.content.trim()) {
+            // Fallback: if the DB message row isn't present yet, render the buffered assistant content as a normal bubble.
+            chatMsgs.push({ role: 'assistant', content: overlay.content, ts: new Date().toISOString(), kind: 'normal' })
+          }
+        }
+
+        setMessages(chatMsgs)
+        const ar = view?.activeRun
+        if (ar && ar.status === 'running' && typeof ar.requestId === 'string') {
+          activeRequestIdRef.current = ar.requestId
+          setStreaming(true)
+          setConnecting(false)
+          // If we have no assistant content yet, we're probably still in tools.
+          const hasAssistant = !!(overlay && typeof overlay.content === 'string' && overlay.content.trim().length > 0)
+          setPending(!hasAssistant)
+        } else {
+          setStreaming(false)
+          setConnecting(false)
+          setPending(false)
+        }
+        return
+      }
+
+      if (f.type === 'assistant.segment.started') {
+        // No-op for now; deltas include messageId and we can place them precisely.
+        return
       }
 
       if (f.type === 'chat.delta') {
@@ -255,6 +298,16 @@ export function ChatPanel(props: { sessionId?: string }) {
           const copy = prev.slice()
           const rid = String(f.requestId ?? activeRequestIdRef.current ?? '')
           const text = String(f.payload?.text ?? '')
+          const mid = f.payload?.messageId ? String(f.payload?.messageId) : null
+
+          // If the server provided a messageId, update that exact bubble.
+          if (mid) {
+            const j = copy.findIndex((m) => m.id === mid)
+            if (j >= 0) {
+              copy[j] = { ...copy[j], content: (copy[j].content ?? '') + text, requestId: rid }
+              return copy
+            }
+          }
 
           // Simple rule: append to the most recent assistant bubble IF it is the most recent bubble for this request.
           const last = copy[copy.length - 1]
@@ -264,7 +317,7 @@ export function ChatPanel(props: { sessionId?: string }) {
           }
 
           // Otherwise create a new assistant bubble segment (this enables true interleaving around tool bubbles).
-          copy.push({ role: 'assistant', content: text, ts: new Date().toISOString(), kind: 'normal', requestId: rid })
+          copy.push({ role: 'assistant', content: text, ts: new Date().toISOString(), kind: 'normal', requestId: rid, id: mid ?? undefined })
           return copy
         })
         bottomRef.current?.scrollIntoView({ block: 'end' })
@@ -327,6 +380,23 @@ export function ChatPanel(props: { sessionId?: string }) {
         setMessages((prev) => [
           ...prev,
           { role: 'tool', content: line, ts: new Date().toISOString(), requestId: String(f.requestId ?? activeRequestIdRef.current ?? ''), kind: 'normal' },
+        ])
+        bottomRef.current?.scrollIntoView({ block: 'end' })
+      } else if (f.type === 'tool.output') {
+        const tool = String(f.payload?.tool ?? 'tool')
+        const c = String(f.payload?.content ?? '')
+        const note = f.payload?.truncated ? '\n\n(truncated in live stream; reload to see full output)' : ''
+        const line = c ? c + note : '(tool output)'
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'tool',
+            content: line,
+            ts: new Date().toISOString(),
+            requestId: String(f.requestId ?? activeRequestIdRef.current ?? ''),
+            kind: 'normal',
+            meta: { name: tool },
+          },
         ])
         bottomRef.current?.scrollIntoView({ block: 'end' })
       }

@@ -1,11 +1,27 @@
+import type { SessionMessage } from './sessionApi'
+
 export type WsFrame =
-  | { type: 'chat.started'; requestId: string | null; payload: { messageId: string } }
-  | { type: 'chat.delta'; requestId: string | null; payload: { text: string } }
+  | { type: 'hello'; requestId: string | null; payload: { lastSeq?: number | null } }
+  | {
+      type: 'snapshot'
+      requestId: string | null
+      payload: {
+        sessionId: string
+        messages: SessionMessage[]
+        activeRun?: { requestId: string; status: string; startedAt: string; endedAt?: string | null; model?: string | null } | null
+        overlays?: { assistant?: { messageId: string; content: string } } | null
+        lastSeq?: number | null
+      }
+    }
+  | { type: 'chat.started'; requestId: string | null; payload: { messageId?: string | null } }
+  | { type: 'assistant.segment.started'; requestId: string | null; payload: { messageId: string } }
+  | { type: 'chat.delta'; requestId: string | null; payload: { text: string; messageId?: string | null } }
   | { type: 'chat.done'; requestId: string | null; payload: { ok: boolean } }
   | { type: 'chat.cancelled'; requestId: string | null; payload: { reason: string } }
   | { type: 'chat.error'; requestId: string | null; payload: { message: string } }
   | { type: 'tool.start'; requestId: string | null; payload: { tool: string; argsPreview: string } }
   | { type: 'tool.end'; requestId: string | null; payload: { tool: string; ok: boolean; durationMs: number } }
+  | { type: 'tool.output'; requestId: string | null; payload: { tool: string; content: string; truncated?: boolean } }
   | { type: 'system.message'; requestId: string | null; payload: { content: string } }
   | { type: string; requestId: string | null; payload: any }
 
@@ -234,6 +250,14 @@ export class SessionSocket {
         }
       }
       if (q.length > 0) this.log('info', 'flushed queued messages', { flushed: q.length })
+
+      // Ask server for a snapshot so we can resync after reconnect.
+      try {
+        this.ws?.send(JSON.stringify({ type: 'hello', requestId: null, payload: {} }))
+        this.log('debug', 'sent hello')
+      } catch {
+        // ignore
+      }
     }
     this.ws.onmessage = (ev) => {
       this.lastMessageAt = nowIso()

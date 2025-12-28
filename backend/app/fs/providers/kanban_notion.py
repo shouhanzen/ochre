@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import hashlib
 import json
+import re
+import unicodedata
 from urllib.parse import quote, unquote
 
 from app.notion.cache import (
@@ -15,6 +18,76 @@ from app.notion.cache import (
     upsert_overlay,
 )
 from app.notion.markdown import parse_card_doc, render_card_doc
+
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_TOKEN_RE = re.compile(r"^[0-9a-f]{6,64}$", re.IGNORECASE)
+
+
+def _snake_slug(s: str, *, cap: int = 64) -> str:
+    """
+    Turn an arbitrary title into a stable-ish snake_case filename segment.
+    - ASCII fold (NFKD) to avoid platform/path oddities in UIs
+    - lowercase, [a-z0-9_]
+    """
+    s = (s or "").strip()
+    if not s:
+        return "task"
+    s = unicodedata.normalize("NFKD", s)
+    s = s.encode("ascii", "ignore").decode("ascii")
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    s = re.sub(r"_+", "_", s)
+    if not s:
+        return "task"
+    if cap and len(s) > cap:
+        s = s[:cap].rstrip("_")
+    return s or "task"
+
+
+def _card_token(card_id: str, *, n: int = 12) -> str:
+    # Stable, non-reversible-ish token so we don't expose Notion page IDs in filenames.
+    return hashlib.sha256(card_id.encode("utf-8")).hexdigest()[:n]
+
+
+def _card_filename(*, card_id: str, title: str) -> str:
+    return f"{_snake_slug(title)}--{_card_token(card_id)}.task.md"
+
+
+def _resolve_card_id(*, board_id: str, filename: str) -> str:
+    """
+    Resolve a filename to the underlying Notion card/page id.
+
+    Supports:
+    - legacy: <uuid>.task.md
+    - pretty: <slug>--<token>.task.md (token = sha256(card_id)[:n])
+    """
+    base = filename
+    if base.endswith(".task.md"):
+        base = base[: -len(".task.md")]
+
+    if _UUID_RE.match(base):
+        return base
+
+    if "--" in base:
+        token = base.split("--")[-1].strip().lower()
+        if not _TOKEN_RE.match(token):
+            raise RuntimeError("Invalid card token in filename")
+        cards = list_cards(board_id)
+        hits: list[str] = []
+        for c in cards:
+            cid = c.get("id")
+            if not cid:
+                continue
+            if _card_token(str(cid)).startswith(token):
+                hits.append(str(cid))
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) == 0:
+            raise RuntimeError("Card not found for token (try refreshing)")
+        raise RuntimeError("Ambiguous card token (multiple matches)")
+
+    raise RuntimeError("Unsupported card filename")
 
 
 class KanbanNotionProvider:
@@ -95,13 +168,18 @@ class KanbanNotionProvider:
                         doc = parse_card_doc(ov["content_md"])
                         if doc.status:
                             st = doc.status
+                        # Prefer overlay title if present (keeps filename stable with local edits).
+                        if doc.title:
+                            c = dict(c)
+                            c["title"] = doc.title
                     except Exception:
                         pass
                 if st == status_name:
+                    title = str(c.get("title") or "")
                     entries.append(
                         {
-                            "name": f"{c['id']}.task.md",
-                            "path": f"/fs/kanban/notion/boards/{board_id}/status/{status_seg}/{c['id']}.task.md",
+                            "name": _card_filename(card_id=str(c["id"]), title=title),
+                            "path": f"/fs/kanban/notion/boards/{board_id}/status/{status_seg}/{_card_filename(card_id=str(c['id']), title=title)}",
                             "kind": "file",
                             "size": None,
                         }
@@ -150,7 +228,7 @@ class KanbanNotionProvider:
         if "/status/" in path and path.endswith(".task.md"):
             parts = path.split("/")
             board_id = parts[5]
-            card_id = parts[-1].replace(".task.md", "")
+            card_id = _resolve_card_id(board_id=board_id, filename=parts[-1])
             ov = get_overlay(card_id)
             if ov and ov.get("content_md"):
                 return {"path": path, "content": ov["content_md"]}
@@ -178,7 +256,7 @@ class KanbanNotionProvider:
         if "/status/" in path and path.endswith(".task.md"):
             parts = path.split("/")
             board_id = parts[5]
-            card_id = parts[-1].replace(".task.md", "")
+            card_id = _resolve_card_id(board_id=board_id, filename=parts[-1])
             upsert_overlay(board_id=board_id, card_id=card_id, content_md=content)
             return {"path": path, "ok": True, "overlay": True}
         raise RuntimeError("Writes only supported for card markdown docs")
@@ -203,10 +281,10 @@ class KanbanNotionProvider:
             raise RuntimeError("Cannot move card across boards")
         from_status = unquote(fp[7])
         to_status = unquote(tp[7])
-        card_id = fp[-1].replace(".task.md", "")
-        to_card_id = tp[-1].replace(".task.md", "")
+        card_id = _resolve_card_id(board_id=from_board, filename=fp[-1])
+        to_card_id = _resolve_card_id(board_id=from_board, filename=tp[-1])
         if card_id != to_card_id:
-            raise RuntimeError("Renaming cards not supported (cardId mismatch)")
+            raise RuntimeError("Move must reference the same card")
         if from_status == to_status:
             return {"fromPath": from_path, "toPath": to_path, "ok": True, "changed": False}
 

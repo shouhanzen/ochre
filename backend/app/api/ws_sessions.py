@@ -42,13 +42,39 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
 
+    disconnect_code: int | None = None
     await ws.accept()
     await register(session_id, ws)
     st = _get_state(session_id)
+    log_event(
+        level="info",
+        event="ws.connect",
+        sessionId=session_id,
+        data={
+            "client": getattr(ws.client, "host", None),
+            "headers": {
+                "origin": ws.headers.get("origin"),
+                "user_agent": ws.headers.get("user-agent"),
+                "x_forwarded_for": ws.headers.get("x-forwarded-for"),
+                "x_real_ip": ws.headers.get("x-real-ip"),
+            },
+        },
+    )
 
     try:
         while True:
-            msg = await ws.receive_json()
+            try:
+                msg = await ws.receive_json()
+            except WebSocketDisconnect as e:
+                disconnect_code = getattr(e, "code", None)
+                raise
+            except Exception as e:  # noqa: BLE001
+                log_event(level="warn", event="ws.receive_error", sessionId=session_id, data={"error": str(e)})
+                try:
+                    await ws.close(code=1003)
+                except Exception:
+                    pass
+                return
             mtype = msg.get("type")
             request_id = msg.get("requestId")
             payload = msg.get("payload") or {}
@@ -227,9 +253,16 @@ async def ws_session(session_id: str, ws: WebSocket) -> None:
 
                 st.task = asyncio.create_task(run_generation())
 
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as e:
+        disconnect_code = getattr(e, "code", None)
         pass
     finally:
         await unregister(session_id, ws)
+        log_event(
+            level="info",
+            event="ws.disconnect",
+            sessionId=session_id,
+            data={"code": disconnect_code, "client": getattr(ws.client, "host", None)},
+        )
 
 

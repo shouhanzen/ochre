@@ -192,6 +192,8 @@ export function ChatPanel(props: { sessionId?: string }) {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [draft, setDraft] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const streamingRef = useRef(false)
+  const [connecting, setConnecting] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sock, setSock] = useState<SessionSocket | null>(null)
@@ -201,8 +203,14 @@ export function ChatPanel(props: { sessionId?: string }) {
   const pendingIdxRef = useRef<number | null>(null)
   const activeRequestIdRef = useRef<string | null>(null)
   const pendingRequestIdRef = useRef<string | null>(null)
+  const waitingForStartedRef = useRef<string | null>(null)
+  const waitingForFirstTokenRef = useRef<string | null>(null)
 
   const canSend = useMemo(() => draft.trim().length > 0 && !streaming, [draft, streaming])
+
+  useEffect(() => {
+    streamingRef.current = streaming
+  }, [streaming])
 
   useEffect(() => {
     const sid = props.sessionId
@@ -216,6 +224,8 @@ export function ChatPanel(props: { sessionId?: string }) {
         pendingIdxRef.current = null
         activeRequestIdRef.current = null
         pendingRequestIdRef.current = null
+        waitingForStartedRef.current = null
+        waitingForFirstTokenRef.current = null
         setPending(false)
       } catch (e: any) {
         setError(e?.message ?? String(e))
@@ -238,6 +248,9 @@ export function ChatPanel(props: { sessionId?: string }) {
           pendingRequestIdRef.current = null
           setPending(false)
         }
+        if (waitingForFirstTokenRef.current && f.requestId === waitingForFirstTokenRef.current) {
+          waitingForFirstTokenRef.current = null
+        }
         setMessages((prev) => {
           const copy = prev.slice()
           const rid = String(f.requestId ?? activeRequestIdRef.current ?? '')
@@ -257,29 +270,41 @@ export function ChatPanel(props: { sessionId?: string }) {
         bottomRef.current?.scrollIntoView({ block: 'end' })
       } else if (f.type === 'chat.started') {
         setStreaming(true)
+        setConnecting(false)
+        waitingForStartedRef.current = null
+        waitingForFirstTokenRef.current = String(f.requestId ?? activeRequestIdRef.current ?? null)
         pendingRequestIdRef.current = String(f.requestId ?? activeRequestIdRef.current ?? null)
         setPending(true)
       } else if (f.type === 'chat.done') {
         setStreaming(false)
+        setConnecting(false)
         streamingAssistantIdxRef.current = null
         pendingIdxRef.current = null
         activeRequestIdRef.current = null
         pendingRequestIdRef.current = null
+        waitingForStartedRef.current = null
+        waitingForFirstTokenRef.current = null
         setPending(false)
       } else if (f.type === 'chat.cancelled') {
         setStreaming(false)
+        setConnecting(false)
         streamingAssistantIdxRef.current = null
         pendingIdxRef.current = null
         activeRequestIdRef.current = null
         pendingRequestIdRef.current = null
+        waitingForStartedRef.current = null
+        waitingForFirstTokenRef.current = null
         setPending(false)
         setMessages((prev) => [...prev, { role: 'system', content: 'Generation cancelled.', ts: new Date().toISOString() }])
       } else if (f.type === 'chat.error') {
         setStreaming(false)
+        setConnecting(false)
         streamingAssistantIdxRef.current = null
         pendingIdxRef.current = null
         activeRequestIdRef.current = null
         pendingRequestIdRef.current = null
+        waitingForStartedRef.current = null
+        waitingForFirstTokenRef.current = null
         setPending(false)
         setError(String(f.payload?.message ?? 'Chat error'))
       } else if (f.type === 'system.message') {
@@ -318,13 +343,47 @@ export function ChatPanel(props: { sessionId?: string }) {
     const userMsg: ChatMsg = { role: 'user', content: draft.trim(), ts: new Date().toISOString() }
     setDraft('')
     const { id: requestId } = safeRandomUUID()
+    waitingForStartedRef.current = requestId
+    waitingForFirstTokenRef.current = null
     activeRequestIdRef.current = requestId
     pendingIdxRef.current = null
     streamingAssistantIdxRef.current = null
     pendingRequestIdRef.current = requestId
+    setConnecting(true)
     setPending(false)
     setMessages((prev) => [...prev, userMsg])
-    sock?.sendChat(userMsg.content, requestId)
+
+    // Instrument: if the PWA “sometimes doesn’t respond”, the usual culprit is no WS open / no server ack.
+    // This log + timeout make it obvious which stage we got stuck at.
+    console.info('[Ochre] chat.send', {
+      requestId,
+      contentLen: userMsg.content.length,
+      ws: sock?.getDebugSnapshot?.(),
+    })
+
+    try {
+      sock?.sendChat(userMsg.content, requestId)
+    } catch (e: any) {
+      console.error('[Ochre] sendChat threw', { requestId, err: e?.message ?? String(e), ws: sock?.getDebugSnapshot?.() })
+      setError(e?.message ?? String(e))
+      setConnecting(false)
+      setPending(false)
+      waitingForStartedRef.current = null
+      return
+    }
+
+    // If we don't get chat.started quickly, capture a snapshot (mobile networks sometimes stall CONNECTING forever).
+    window.setTimeout(() => {
+      if (waitingForStartedRef.current !== requestId) return
+      console.warn('[Ochre] chat.started timeout', { requestId, ws: sock?.getDebugSnapshot?.() })
+    }, 8000)
+
+    // If we started but never got first token, capture that separately.
+    window.setTimeout(() => {
+      if (!streamingRef.current) return
+      if (waitingForFirstTokenRef.current !== requestId) return
+      console.warn('[Ochre] first token timeout', { requestId, ws: sock?.getDebugSnapshot?.() })
+    }, 25_000)
   }
 
   return (
@@ -384,6 +443,14 @@ export function ChatPanel(props: { sessionId?: string }) {
             </details>
           )
         })}
+        {connecting ? (
+          <div className="chatLine assistant" data-kind="pending">
+            <div className="chatLineHeader">
+              <span className="chatRole">assistant</span>
+            </div>
+            <div className="chatContent">Connecting…</div>
+          </div>
+        ) : null}
         {pending ? (
           <div className="chatLine assistant" data-kind="pending">
             <div className="chatLineHeader">

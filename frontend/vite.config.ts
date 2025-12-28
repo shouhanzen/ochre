@@ -52,7 +52,7 @@ export default defineConfig({
   ],
   server: {
     // Required for PWA installability over LAN IPs (localhost is the only HTTP exception).
-    https: true,
+    https: {},
     proxy: {
       '/api': 'http://localhost:8000',
       '/ws': {

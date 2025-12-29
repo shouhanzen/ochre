@@ -193,7 +193,8 @@ function Markdown({ text }: { text: string }) {
   )
 }
 
-export function ChatPanel(props: { sessionId?: string }) {
+export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mobile' }) {
+  const isMobile = props.variant === 'mobile'
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [draft, setDraft] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -458,10 +459,12 @@ export function ChatPanel(props: { sessionId?: string }) {
 
   return (
     <div className="panel">
-      <div className="panelHeader">
-        <div className="panelTitle">Chat</div>
-        <div className="muted">Backend default model</div>
-      </div>
+      {isMobile ? null : (
+        <div className="panelHeader">
+          <div className="panelTitle">Chat</div>
+          <div className="muted">Backend default model</div>
+        </div>
+      )}
 
       <div className="chatLog">
         {!props.sessionId ? <div className="muted">Initializing session…</div> : null}
@@ -534,13 +537,19 @@ export function ChatPanel(props: { sessionId?: string }) {
 
       {error ? <div className="error">{error}</div> : null}
 
-      <div className="chatComposer">
+      <div className={isMobile ? 'chatComposer compact' : 'chatComposer'}>
         <textarea
           className="textarea"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={props.sessionId ? 'Send a message…' : 'Waiting for session…'}
-          rows={3}
+          rows={isMobile ? 1 : 3}
+          inputMode="text"
+          enterKeyHint="send"
+          autoComplete={isMobile ? 'off' : undefined}
+          autoCorrect={isMobile ? 'off' : undefined}
+          autoCapitalize={isMobile ? 'none' : undefined}
+          spellCheck={isMobile ? false : undefined}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()

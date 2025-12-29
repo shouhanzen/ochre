@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fsList, fsMove, fsRead, fsWrite } from '../api'
+import { TodoFileView } from './TodoFileView'
 
 type TaskDoc = {
   pageId: string
@@ -86,8 +87,24 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
   const [task, setTask] = useState<TaskDoc | null>(null)
   const [taskError, setTaskError] = useState<string | null>(null)
   const [statusOpts, setStatusOpts] = useState<StatusOpt[]>([])
+  const [todoView, setTodoView] = useState<'clicky' | 'text'>('clicky')
 
   const title = useMemo(() => props.path ?? 'No file selected', [props.path])
+  const isTodo = !!props.path && props.path.endsWith('.todo.md')
+  const isTask = !!props.path && props.path.endsWith('.task.md')
+
+  useEffect(() => {
+    const path = props.path
+    if (!path || !path.endsWith('.todo.md')) return
+    const k = `ochre.todoView.${path}`
+    try {
+      const v = localStorage.getItem(k)
+      if (v === 'text' || v === 'clicky') setTodoView(v)
+      else setTodoView('clicky')
+    } catch {
+      setTodoView('clicky')
+    }
+  }, [props.path])
 
   useEffect(() => {
     const path = props.path
@@ -141,6 +158,7 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
   async function save() {
     const path = props.path
     if (!path) return
+    if (path.endsWith('.todo.md') && todoView === 'clicky') return
     setSaving(true)
     setError(null)
     try {
@@ -157,6 +175,30 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
     } finally {
       setSaving(false)
     }
+  }
+
+  async function saveTodo(next: string) {
+    const path = props.path
+    if (!path) return
+    setSaving(true)
+    setError(null)
+    try {
+      await fsWrite(path, next)
+      setContent(next)
+      props.onSaved?.(path)
+    } catch (e: any) {
+      setError(e?.message ?? String(e))
+      throw e
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function initTodoEmpty() {
+    const path = props.path
+    if (!path) return
+    const template = `# Todos\n\n- [ ] Example task\n`
+    await saveTodo(template)
   }
 
   async function moveToStatus(nextStatus: string) {
@@ -191,7 +233,46 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
         <div className="panelTitle">Editor</div>
         <div className="muted">{title}</div>
         <div className="row">
-          <button className="button" onClick={() => void save()} disabled={!props.path || saving}>
+          {isTodo ? (
+            <>
+              <button
+                className={todoView === 'clicky' ? 'button' : 'button secondary'}
+                onClick={() => {
+                  const path = props.path
+                  if (!path) return
+                  setTodoView('clicky')
+                  try {
+                    localStorage.setItem(`ochre.todoView.${path}`, 'clicky')
+                  } catch {
+                    // ignore
+                  }
+                }}
+              >
+                Clicky
+              </button>
+              <button
+                className={todoView === 'text' ? 'button' : 'button secondary'}
+                onClick={() => {
+                  const path = props.path
+                  if (!path) return
+                  setTodoView('text')
+                  try {
+                    localStorage.setItem(`ochre.todoView.${path}`, 'text')
+                  } catch {
+                    // ignore
+                  }
+                }}
+              >
+                Text
+              </button>
+            </>
+          ) : null}
+          <button
+            className="button"
+            onClick={() => void save()}
+            disabled={!props.path || saving || (isTodo && todoView === 'clicky')}
+            title={isTodo && todoView === 'clicky' ? 'Clicky todo view saves automatically.' : undefined}
+          >
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
@@ -201,7 +282,15 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
 
       <div className="editor">
         {loading ? <div className="muted">Loading…</div> : null}
-        {props.path?.endsWith('.task.md') && task ? (
+        {isTodo && todoView === 'clicky' && props.path ? (
+          <TodoFileView
+            path={props.path}
+            content={content}
+            saving={saving}
+            onWrite={saveTodo}
+            onInitEmpty={initTodoEmpty}
+          />
+        ) : isTask && task ? (
           <div className="taskCard">
             {taskError ? <div className="error">{taskError}</div> : null}
             <div className="taskCardGrid">

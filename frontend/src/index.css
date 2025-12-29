@@ -58,7 +58,8 @@ body {
   flex-direction: column;
 }
 .mobileShell.keyboardOpen .mobileMain {
-  padding-bottom: env(safe-area-inset-bottom);
+  /* The visualViewport height already shrinks for the keyboard; extra padding here creates a “dead” strip above the keyboard. */
+  padding-bottom: 0;
 }
 .mobileMain > .panel {
   flex: 1;
@@ -88,7 +89,7 @@ body {
 
 .mobileTabBar {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 0;
   border-top: 1px solid var(--vscode-border);
   background: var(--vscode-sideBar-background);
@@ -657,6 +658,20 @@ body {
   grid-template-columns: 1fr 110px;
   gap: 10px;
 }
+
+/* Mobile chat composer: default to a single-line input feel */
+.chatComposer.compact {
+  grid-template-columns: 1fr 88px;
+  gap: 8px;
+}
+.chatComposer .textarea {
+  resize: none; /* resizing chat input is rarely useful (especially on mobile) */
+}
+.chatComposer.compact .textarea {
+  padding: 10px 10px;
+  line-height: 1.2;
+}
+
 
 /* Todos */
 .todoList {

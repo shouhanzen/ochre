@@ -4,7 +4,6 @@ import { ActivityBar } from './components/ActivityBar'
 import { Editor } from './components/Editor'
 import { FileTree } from './components/FileTree'
 import { SessionList } from './components/SessionList'
-import { TodoPanel } from './components/TodoPanel'
 import { PendingPanel } from './components/PendingPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { StatusBar } from './components/StatusBar'
@@ -12,7 +11,7 @@ import { MobileTabBar } from './components/MobileTabBar'
 import { DebugModal } from './components/DebugModal'
 import { createSession } from './sessionApi'
 
-type MobileTab = 'browse' | 'editor' | 'chat' | 'today' | 'pending'
+type MobileTab = 'browse' | 'editor' | 'chat' | 'pending'
 type BrowseMode = 'files' | 'sessions'
 
 function useIsMobile(breakpointPx = 900) {
@@ -151,16 +150,23 @@ function useKeyboardOpen(enabled: boolean) {
 }
 
 export default function App() {
-  const STORAGE_KEY = 'ochre.selectedPath'
+  const PATH_STORAGE_KEY = 'ochre.selectedPath'
+  const SESSION_STORAGE_KEY = 'ochre.selectedSessionId'
   const [selectedPath, setSelectedPath] = useState<string | undefined>(() => {
     try {
-      return localStorage.getItem(STORAGE_KEY) || '/fs/todos/today.md'
+      return localStorage.getItem(PATH_STORAGE_KEY) || '/fs/todos/today.md'
     } catch {
       return '/fs/todos/today.md'
     }
   })
-  const [todoRefreshKey, setTodoRefreshKey] = useState(0)
-  const [sessionId, setSessionId] = useState<string | undefined>(undefined)
+  const [sessionId, setSessionId] = useState<string | undefined>(() => {
+    try {
+      const v = localStorage.getItem(SESSION_STORAGE_KEY)
+      return v && v.trim().length > 0 ? v : undefined
+    } catch {
+      return undefined
+    }
+  })
   const [sessionInitError, setSessionInitError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [debugOpen, setDebugOpen] = useState(false)
@@ -175,11 +181,20 @@ export default function App() {
 
   useEffect(() => {
     try {
-      if (selectedPath) localStorage.setItem(STORAGE_KEY, selectedPath)
+      if (selectedPath) localStorage.setItem(PATH_STORAGE_KEY, selectedPath)
     } catch {
       // ignore
     }
   }, [selectedPath])
+
+  useEffect(() => {
+    try {
+      if (sessionId) localStorage.setItem(SESSION_STORAGE_KEY, sessionId)
+      else localStorage.removeItem(SESSION_STORAGE_KEY)
+    } catch {
+      // ignore
+    }
+  }, [sessionId])
 
   useEffect(() => {
     if (sessionId) return
@@ -222,9 +237,7 @@ export default function App() {
                 ? selectedPath ?? 'Editor'
                 : mobileTab === 'chat'
                   ? 'Chat'
-                  : mobileTab === 'today'
-                    ? 'Today'
-                    : 'Pending'}
+                  : 'Pending'}
           </div>
           <div className="row">
             <button className="button secondary" onClick={() => setSettingsOpen(true)}>
@@ -274,14 +287,10 @@ export default function App() {
             <Editor
               path={selectedPath}
               onNavigate={(p) => setSelectedPath(p)}
-              onSaved={(p) => {
-                if (p.startsWith('/fs/todos/')) setTodoRefreshKey((k) => k + 1)
-              }}
             />
           ) : null}
 
-          {mobileTab === 'chat' ? <ChatPanel sessionId={sessionId} /> : null}
-          {mobileTab === 'today' ? <TodoPanel refreshKey={todoRefreshKey} /> : null}
+          {mobileTab === 'chat' ? <ChatPanel sessionId={sessionId} variant="mobile" /> : null}
           {mobileTab === 'pending' ? <PendingPanel sessionId={sessionId} /> : null}
         </div>
 
@@ -332,16 +341,12 @@ export default function App() {
           <Editor
             path={selectedPath}
             onNavigate={(p) => setSelectedPath(p)}
-            onSaved={(p) => {
-              if (p.startsWith('/fs/todos/')) setTodoRefreshKey((k) => k + 1)
-            }}
           />
         </div>
 
         <div className="rightPanel">
           <ChatPanel sessionId={sessionId} />
           <PendingPanel sessionId={sessionId} />
-          <TodoPanel refreshKey={todoRefreshKey} />
         </div>
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} onOpenDebug={() => setDebugOpen(true)} />

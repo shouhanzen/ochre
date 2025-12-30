@@ -38,6 +38,7 @@ class ActiveRun:
     cancel_event: asyncio.Event
     task: Optional[asyncio.Task]
     open_assistant: Optional[OpenAssistant]
+    tool_meta: dict[str, dict[str, Any]]
 
 
 class ConversationModel:
@@ -114,6 +115,7 @@ class ConversationModel:
                 cancel_event=asyncio.Event(),
                 task=None,
                 open_assistant=None,
+                tool_meta={},
             )
             self._seen_request_ids[request_id] = "running"
 
@@ -168,19 +170,33 @@ class ConversationModel:
                 if et == "chat.delta":
                     self._on_chat_delta(request_id=request_id, text=str(payload.get("text") or ""))
                     return
+                if et == "assistant.tool_calls":
+                    self._on_assistant_tool_calls(request_id=request_id, tool_calls=payload.get("toolCalls"))
+                    return
                 if et == "tool.start":
-                    self._on_tool_start(request_id=request_id, tool=str(payload.get("tool") or ""), args_preview=str(payload.get("argsPreview") or ""))
+                    self._on_tool_start(
+                        request_id=request_id,
+                        tool=str(payload.get("tool") or ""),
+                        tc_id=str(payload.get("tcId") or ""),
+                        args_preview=str(payload.get("argsPreview") or ""),
+                    )
                     return
                 if et == "tool.end":
                     self._on_tool_end(
                         request_id=request_id,
                         tool=str(payload.get("tool") or ""),
+                        tc_id=str(payload.get("tcId") or ""),
                         ok=bool(payload.get("ok", True)),
                         duration_ms=int(payload.get("durationMs") or 0),
                     )
                     return
                 if et == "tool.output":
-                    self._on_tool_output(request_id=request_id, tool=str(payload.get("tool") or ""), content=str(payload.get("content") or ""))
+                    self._on_tool_output(
+                        request_id=request_id,
+                        tool=str(payload.get("tool") or ""),
+                        tc_id=str(payload.get("tcId") or ""),
+                        content=str(payload.get("content") or ""),
+                    )
                     return
                 # forward unknown events as-is
                 asyncio.create_task(send(self.session_id, {"type": et, "requestId": request_id, "payload": payload}))
@@ -265,7 +281,30 @@ class ConversationModel:
             send(self.session_id, {"type": "chat.delta", "requestId": request_id, "payload": {"text": text, "messageId": mid}})
         )
 
-    def _on_tool_start(self, *, request_id: str, tool: str, args_preview: str) -> None:
+    def _on_assistant_tool_calls(self, *, request_id: str, tool_calls: Any) -> None:
+        """
+        Persist tool_calls onto the most recent assistant segment so later turns have a valid tool-call chain.
+        """
+        if not isinstance(tool_calls, list):
+            return
+        ar = self.active_run
+        if ar is None or ar.request_id != request_id or ar.status != "running":
+            return
+        if ar.open_assistant is None:
+            # If there were no deltas/content, ensure a placeholder assistant message exists to attach tool_calls.
+            mid = self._ensure_open_assistant(request_id=request_id)
+            if mid is None or ar.open_assistant is None:
+                return
+        try:
+            update_message_content(
+                ar.open_assistant.message_id,
+                content=ar.open_assistant.buffer_text,
+                meta={"requestId": request_id, "segment": True, "streaming": True, "tool_calls": tool_calls},
+            )
+        except Exception:
+            pass
+
+    def _on_tool_start(self, *, request_id: str, tool: str, tc_id: str, args_preview: str) -> None:
         ar = self.active_run
         if ar is None or ar.request_id != request_id or ar.status != "running":
             return
@@ -280,17 +319,17 @@ class ConversationModel:
             except Exception:
                 pass
             ar.open_assistant = None
-
-        line = f"▶ {tool} {args_preview}".rstrip() if args_preview else f"▶ {tool}"
-        add_message(session_id=self.session_id, role="tool", content=line, meta={"name": tool, "requestId": request_id})
+        if tc_id:
+            ar.tool_meta[tc_id] = {"tool": tool, "argsPreview": args_preview}
         asyncio.create_task(send(self.session_id, {"type": "tool.start", "requestId": request_id, "payload": {"tool": tool, "argsPreview": args_preview}}))
 
-    def _on_tool_end(self, *, request_id: str, tool: str, ok: bool, duration_ms: int) -> None:
+    def _on_tool_end(self, *, request_id: str, tool: str, tc_id: str, ok: bool, duration_ms: int) -> None:
         ar = self.active_run
         if ar is None or ar.request_id != request_id or ar.status != "running":
             return
-        line = f"■ {tool} {'ok' if ok else 'error'} ({duration_ms}ms)"
-        add_message(session_id=self.session_id, role="tool", content=line, meta={"name": tool, "requestId": request_id})
+        if tc_id:
+            ar.tool_meta.setdefault(tc_id, {"tool": tool})
+            ar.tool_meta[tc_id].update({"ok": ok, "durationMs": duration_ms})
         asyncio.create_task(
             send(
                 self.session_id,
@@ -298,12 +337,16 @@ class ConversationModel:
             )
         )
 
-    def _on_tool_output(self, *, request_id: str, tool: str, content: str) -> None:
+    def _on_tool_output(self, *, request_id: str, tool: str, tc_id: str, content: str) -> None:
         ar = self.active_run
         if ar is None or ar.request_id != request_id or ar.status != "running":
             return
-        # Persist full tool output to DB (may be large).
-        add_message(session_id=self.session_id, role="tool", content=content, meta={"name": tool, "requestId": request_id})
+        meta: dict[str, Any] = {"name": tool, "requestId": request_id}
+        if tc_id:
+            meta["tool_call_id"] = tc_id
+            meta.update(ar.tool_meta.get(tc_id, {}))
+        # Persist full tool output to DB (may be large) as a valid tool message when tool_call_id is present.
+        add_message(session_id=self.session_id, role="tool", content=content, meta=meta)
 
         preview, truncated = _truncate(content, max_chars=20_000)
         asyncio.create_task(

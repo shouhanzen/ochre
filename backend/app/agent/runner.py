@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Optional
 
 from app.agent.openrouter import chat_completions
@@ -49,6 +50,9 @@ async def run_agent(
 
         for tc in tool_calls:
             tc_id = tc.get("id")
+            if not tc_id:
+                tc_id = f"ochre-tc-{int(time.time() * 1000)}"
+                tc["id"] = tc_id
             fn = (tc.get("function") or {})
             name = fn.get("name")
             raw_args = fn.get("arguments") or "{}"

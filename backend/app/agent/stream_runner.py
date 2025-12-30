@@ -12,7 +12,6 @@ from app.agent.tool_errors import ToolStructuredError
 from app.agent.tool_dispatch import dispatch_tool_call
 from app.agent.toolspecs import tool_specs
 
-
 @dataclass
 class StreamResult:
     assistant_text: str
@@ -63,6 +62,13 @@ async def stream_once(
                     slot["function"]["arguments"] += fn["arguments"]
 
     ordered = [tool_calls[k] for k in sorted(tool_calls.keys())]
+    # Some providers/models may omit tool call ids in streaming deltas.
+    # OpenAI-compatible tool result messages require a non-empty id; synthesize one if missing.
+    if ordered:
+        base = f"ochre-tc-{int(time.time() * 1000)}"
+        for i, tc in enumerate(ordered):
+            if not tc.get("id"):
+                tc["id"] = f"{base}-{i}"
     return StreamResult(assistant_text="".join(buf), tool_calls=ordered, finish_reason=finish_reason)
 
 
@@ -99,6 +105,8 @@ async def run_tool_loop_streaming(
             # Append assistant message with tool_calls
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": result.assistant_text, "tool_calls": result.tool_calls}
             msgs.append(assistant_msg)
+            # Emit tool_calls as a structured event so the conversation layer can persist a valid tool-call chain.
+            on_event({"type": "assistant.tool_calls", "payload": {"toolCalls": result.tool_calls}})
 
             for tc in result.tool_calls:
                 tc_id = tc.get("id")
@@ -111,7 +119,7 @@ async def run_tool_loop_streaming(
                 except Exception:
                     args = {"_raw": raw_args}
 
-                on_event({"type": "tool.start", "payload": {"tool": name, "argsPreview": raw_args[:200]}})
+                on_event({"type": "tool.start", "payload": {"tool": name, "tcId": tc_id, "argsPreview": raw_args[:200]}})
                 t0 = time.time()
                 ok = True
                 try:
@@ -124,9 +132,9 @@ async def run_tool_loop_streaming(
                     ok = False
                     content = json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
                 ms = int((time.time() - t0) * 1000)
-                on_event({"type": "tool.end", "payload": {"tool": name, "ok": ok, "durationMs": ms}})
+                on_event({"type": "tool.end", "payload": {"tool": name, "tcId": tc_id, "ok": ok, "durationMs": ms}})
                 # Emit tool output as a separate transcript event (may be large).
-                on_event({"type": "tool.output", "payload": {"tool": name, "content": content}})
+                on_event({"type": "tool.output", "payload": {"tool": name, "tcId": tc_id, "content": content}})
 
                 msgs.append({"role": "tool", "tool_call_id": tc_id, "name": name, "content": content})
 

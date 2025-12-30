@@ -19,6 +19,7 @@ class RootProvider:
                 {"name": "mnt", "path": "/fs/mnt", "kind": "dir", "size": None},
                 {"name": "todos", "path": "/fs/todos", "kind": "dir", "size": None},
                 {"name": "kanban", "path": "/fs/kanban", "kind": "dir", "size": None},
+                {"name": "email", "path": "/fs/email", "kind": "dir", "size": None},
             ],
         }
 

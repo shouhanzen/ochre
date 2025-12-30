@@ -5,6 +5,7 @@ from typing import Any
 from app.fs.providers.kanban_notion import KanbanNotionProvider
 from app.fs.providers.kanban_root import KanbanRootProvider
 from app.fs.providers.mnt import MntProvider
+from app.fs.providers.email_gmail import EmailGmailProvider
 from app.fs.providers.root import RootProvider
 from app.fs.providers.todos import TodosProvider
 from app.logging.ndjson import log_event
@@ -19,6 +20,7 @@ _providers = [
     KanbanRootProvider(),
     MntProvider(),
     TodosProvider(),
+    EmailGmailProvider(),
     KanbanNotionProvider(),  # stubbed initially; filled in later in plan
 ]
 

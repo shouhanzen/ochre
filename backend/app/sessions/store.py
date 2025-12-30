@@ -107,7 +107,17 @@ def update_message_content(message_id: str, *, content: str, meta: Optional[dict
         if meta is None:
             conn.execute("UPDATE messages SET content=? WHERE id=?", (content, message_id))
         else:
-            meta_json = json.dumps(meta, ensure_ascii=False)
+            # Merge meta into existing meta_json rather than overwriting it.
+            # This prevents accidental loss of fields like assistant tool_calls, which must stay linked to tool outputs.
+            try:
+                row = conn.execute("SELECT meta_json FROM messages WHERE id=?", (message_id,)).fetchone()
+                existing_raw = (row["meta_json"] if row else None) or "{}"
+                existing = json.loads(existing_raw)
+                existing = existing if isinstance(existing, dict) else {"meta": existing}
+            except Exception:
+                existing = {}
+            merged = {**existing, **(meta or {})}
+            meta_json = json.dumps(merged, ensure_ascii=False)
             conn.execute("UPDATE messages SET content=?, meta_json=? WHERE id=?", (content, meta_json, message_id))
         conn.commit()
     finally:
@@ -144,8 +154,26 @@ def _row_to_message(row: Any) -> MessageRow:
 
 def messages_for_llm(session_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
     msgs = list_messages(session_id, limit=limit)
+    # Only include tool outputs that have a corresponding assistant tool_call id in the same history.
+    # Providers reject tool outputs that can't be linked to a tool call ("No tool call found for ... call_id").
+    valid_call_ids: set[str] = set()
+    for m in msgs:
+        if m.role != "assistant":
+            continue
+        tc = (m.meta or {}).get("tool_calls")
+        if not isinstance(tc, list):
+            continue
+        for item in tc:
+            if isinstance(item, dict):
+                cid = item.get("id")
+                if isinstance(cid, str) and cid:
+                    valid_call_ids.add(cid)
     out: list[dict[str, Any]] = []
     for m in msgs:
+        if m.role == "tool":
+            tcid = (m.meta or {}).get("tool_call_id")
+            if not (isinstance(tcid, str) and tcid and tcid in valid_call_ids):
+                continue
         d: dict[str, Any] = {"role": m.role}
         if m.content is not None:
             d["content"] = m.content

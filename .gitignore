@@ -28,6 +28,9 @@ backend/data/todos/*.json
 backend/data/logs/
 backend/data/logs/*.ndjson
 
+# Gmail OAuth (keep tokens/clients local)
+backend/data/gmail/
+
 # OS / editors
 .DS_Store
 Thumbs.db

@@ -15,6 +15,58 @@ type ChatMsg = {
   meta?: Record<string, unknown>
 }
 
+function formatChatTranscript(msgs: ChatMsg[]): string {
+  const parts: string[] = []
+  for (const it of groupRenderItems(msgs)) {
+    if (it.kind === 'msg') {
+      const m = it.msg
+      const ts = m.ts ? ` [${m.ts}]` : ''
+      const head = `${m.role.toUpperCase()}${ts}:`
+      parts.push(`${head}\n${(m.content ?? '').trimEnd()}\n`)
+      continue
+    }
+    // tools
+    const toolLines = it.msgs.map((m) => (m.content ?? '').trimEnd()).filter(Boolean)
+    if (toolLines.length) {
+      parts.push(`TOOLS:\n${toolLines.join('\n')}\n`)
+    }
+  }
+  return parts.join('\n').trimEnd()
+}
+
+async function writeClipboardTextWithFallback(text: string): Promise<boolean> {
+  // Prefer modern clipboard API when available; it may fail on non-HTTPS contexts.
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // fall through to execCommand fallback
+  }
+
+  try {
+    if (typeof document === 'undefined') return false
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', 'true')
+    ta.style.position = 'fixed'
+    ta.style.top = '0'
+    ta.style.left = '0'
+    ta.style.width = '1px'
+    ta.style.height = '1px'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
+}
+
 function toChatMsgs(msgs: SessionMessage[]): ChatMsg[] {
   return msgs
     .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'system' || m.role === 'tool')
@@ -96,6 +148,31 @@ function _safeJsonPreview(s: string): string | null {
 }
 
 function parseToolPills(toolMsgs: ChatMsg[]): ToolPill[] {
+  // New format: persisted tool result messages with meta.tool_call_id + meta.ok/durationMs/argsPreview.
+  const structured = toolMsgs.some((m) => !!(m.meta && (m.meta as any)['tool_call_id']))
+  if (structured) {
+    const pills: ToolPill[] = []
+    for (const m of toolMsgs) {
+      const meta: any = m.meta ?? {}
+      const tcId = typeof meta.tool_call_id === 'string' ? meta.tool_call_id : null
+      if (!tcId) continue
+      const name = (typeof meta.name === 'string' && meta.name) || 'tool'
+      const ok = typeof meta.ok === 'boolean' ? meta.ok : undefined
+      const durationMs = typeof meta.durationMs === 'number' ? meta.durationMs : undefined
+      const argsPreview = typeof meta.argsPreview === 'string' ? meta.argsPreview : undefined
+      const outPreview = _safeJsonPreview(m.content ?? '')
+      pills.push({
+        name,
+        status: ok == null ? undefined : ok ? 'ok' : 'error',
+        durationMs,
+        argsPreview,
+        outputPreview: outPreview ?? undefined,
+        rawLines: [m.content ?? ''],
+      })
+    }
+    return pills
+  }
+
   const pills: ToolPill[] = []
   const startRe = /^▶\s+(\S+)\s*(.*)$/
   const endRe = /^■\s+(\S+)\s+(ok|error)\s+\((\d+)ms\)$/
@@ -203,6 +280,7 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sock, setSock] = useState<SessionSocket | null>(null)
+  const [copied, setCopied] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const streamingAssistantIdxRef = useRef<number | null>(null)
@@ -457,14 +535,29 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
     }, 25_000)
   }
 
+  async function onCopyConversation() {
+    setCopied(false)
+    const text = formatChatTranscript(messages) || '(no conversation yet)'
+    const ok = await writeClipboardTextWithFallback(text)
+    if (ok) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1200)
+    } else {
+      setCopied(false)
+    }
+  }
+
   return (
     <div className="panel">
-      {isMobile ? null : (
-        <div className="panelHeader">
-          <div className="panelTitle">Chat</div>
-          <div className="muted">Backend default model</div>
+      <div className="panelHeader">
+        <div className="panelTitle">Chat</div>
+        {isMobile ? null : <div className="muted">Backend default model</div>}
+        <div className="row">
+          <button className="button secondary" disabled={!props.sessionId || messages.length === 0} onClick={() => void onCopyConversation()}>
+            {copied ? 'Copied' : 'Copy conversation'}
+          </button>
         </div>
-      )}
+      </div>
 
       <div className="chatLog">
         {!props.sessionId ? <div className="muted">Initializing session…</div> : null}

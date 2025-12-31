@@ -12,6 +12,7 @@ from app.email.gmail_client import (
     gmail_get_message_full,
     gmail_list_labels,
     gmail_list_message_ids,
+    gmail_modify_message_labels,
     render_message_markdown,
     summarize_metadata,
 )
@@ -106,6 +107,11 @@ class EmailGmailProvider:
         return (
             "# /fs/email (Gmail, read-only)\n\n"
             "Ochre can expose Gmail mailboxes as a virtual filesystem.\n\n"
+            "## Structure\n\n"
+            "- `inbox`: Messages in Inbox (not starred)\n"
+            "- `starred`: Messages in Inbox (starred)\n"
+            "- `archive`: Messages archived (not in Inbox)\n"
+            "- `labels`: Access by specific Gmail label\n\n"
             "## Configure\n\n"
             "Set either a single account:\n\n"
             "- `OCHRE_GMAIL_CREDENTIALS_PATH`: OAuth client JSON path\n"
@@ -164,6 +170,55 @@ class EmailGmailProvider:
             "entries": [{"name": "ERROR.txt", "path": err_path, "kind": "file", "size": None}],
         }
 
+    def _list_messages(self, acct: str, path: str, label_id: str | None = None, query: str | None = None) -> dict[str, Any]:
+        lock = self._lock_for(acct)
+        with lock:
+            st = self._state(acct)
+            try:
+                l_ids = [label_id] if label_id else None
+                msg_ids = gmail_list_message_ids(
+                    st.service, user_id=st.acct.user_id, label_ids=l_ids, query=query, max_results=50
+                )
+                meta = gmail_fetch_metadata_batch(st.service, user_id=st.acct.user_id, message_ids=msg_ids)
+            except GmailError as e:
+                self._reset_state(acct, reason=f"list_messages failed: {str(e)[:200]}")
+                st = self._state(acct)
+                try:
+                    l_ids = [label_id] if label_id else None
+                    msg_ids = gmail_list_message_ids(
+                        st.service, user_id=st.acct.user_id, label_ids=l_ids, query=query, max_results=50
+                    )
+                    meta = gmail_fetch_metadata_batch(st.service, user_id=st.acct.user_id, message_ids=msg_ids)
+                except GmailError as e2:
+                    return self._error_listing(
+                        path,
+                        error=(
+                            "Gmail messages are temporarily unavailable.\n\n"
+                            f"Query: {query}, Label: {label_id}\n"
+                            f"Error: {str(e2)[:600]}\n"
+                        ),
+                    )
+        
+        entries = []
+        for mid in msg_ids:
+            m = meta.get(mid) or {"id": mid}
+            view = summarize_metadata(m)
+            date_part = "unknown-date"
+            if view.internal_date and len(view.internal_date) >= 10:
+                date_part = view.internal_date[:10]
+            subj = view.subject.strip() if view.subject else ""
+            subj_slug = _snake_slug(subj or "message")
+            fname = f"{date_part}--{subj_slug}--{mid}.email.md"
+            entries.append(
+                {
+                    "name": fname,
+                    "path": f"{path}/{fname}",
+                    "kind": "file",
+                    "size": None,
+                }
+            )
+        return {"path": path, "entries": entries}
+
     def list(self, path: str) -> dict[str, Any]:
         p = path.rstrip("/") or "/fs/email"
         rel = _email_rel_parts(p)
@@ -182,97 +237,63 @@ class EmailGmailProvider:
             _ = self._state(acct)  # validates config
             return {
                 "path": p,
-                "entries": [{"name": "labels", "path": f"/fs/email/{acct}/labels", "kind": "dir", "size": None}],
+                "entries": [
+                    {"name": "inbox", "path": f"/fs/email/{acct}/inbox", "kind": "dir", "size": None},
+                    {"name": "starred", "path": f"/fs/email/{acct}/starred", "kind": "dir", "size": None},
+                    {"name": "archive", "path": f"/fs/email/{acct}/archive", "kind": "dir", "size": None},
+                    {"name": "labels", "path": f"/fs/email/{acct}/labels", "kind": "dir", "size": None},
+                ],
             }
 
-        # /fs/email/<acct>/labels
-        if len(rel) == 2 and rel[1] == "labels":
+        # /fs/email/<acct>/<folder>
+        if len(rel) == 2:
             acct = rel[0]
-            lock = self._lock_for(acct)
-            contended = lock.locked()
-            if contended:
-                pass
-            with lock:
-                st = self._state(acct)
-                try:
-                    labels = gmail_list_labels(st.service, user_id=st.acct.user_id)
-                except GmailError as e:
-                    # Transient TLS / connection corruption can happen; rebuild service once and retry.
-                    self._reset_state(acct, reason=f"gmail_list_labels failed: {str(e)[:200]}")
+            folder = rel[1]
+            
+            if folder == "inbox":
+                return self._list_messages(acct, p, query="in:inbox -is:starred")
+            if folder == "starred":
+                return self._list_messages(acct, p, query="in:inbox is:starred")
+            if folder == "archive":
+                return self._list_messages(acct, p, query="-in:inbox")
+
+            if folder == "labels":
+                # List labels
+                lock = self._lock_for(acct)
+                with lock:
                     st = self._state(acct)
                     try:
                         labels = gmail_list_labels(st.service, user_id=st.acct.user_id)
-                    except GmailError as e2:
-                        return self._error_listing(
-                            p,
-                            error=(
-                                "Gmail labels are temporarily unavailable.\n\n"
-                                f"Error: {str(e2)[:600]}\n"
-                            ),
-                        )
-            entries = []
-            for label in labels:
-                lid = str(label.get("id") or "").strip()
-                lname = str(label.get("name") or "").strip() or lid
-                if not lid:
-                    continue
-                entries.append(
-                    {"name": lname, "path": f"/fs/email/{acct}/labels/{lid}", "kind": "dir", "size": None}
-                )
-            entries.sort(key=lambda e: str(e.get("name") or "").lower())
-            return {"path": p, "entries": entries}
+                    except GmailError as e:
+                        self._reset_state(acct, reason=f"gmail_list_labels failed: {str(e)[:200]}")
+                        st = self._state(acct)
+                        try:
+                            labels = gmail_list_labels(st.service, user_id=st.acct.user_id)
+                        except GmailError as e2:
+                            return self._error_listing(
+                                p,
+                                error=(
+                                    "Gmail labels are temporarily unavailable.\n\n"
+                                    f"Error: {str(e2)[:600]}\n"
+                                ),
+                            )
+                entries = []
+                for label in labels:
+                    lid = str(label.get("id") or "").strip()
+                    lname = str(label.get("name") or "").strip() or lid
+                    if not lid:
+                        continue
+                    entries.append(
+                        {"name": lname, "path": f"/fs/email/{acct}/labels/{lid}", "kind": "dir", "size": None}
+                    )
+                entries.sort(key=lambda e: str(e.get("name") or "").lower())
+                return {"path": p, "entries": entries}
 
         # /fs/email/<acct>/labels/<labelId>
         if len(rel) == 3 and rel[1] == "labels":
             acct = rel[0]
             label_id = rel[2]
-            lock = self._lock_for(acct)
-            contended = lock.locked()
-            if contended:
-                pass
-            with lock:
-                st = self._state(acct)
-                try:
-                    msg_ids = gmail_list_message_ids(
-                        st.service, user_id=st.acct.user_id, label_id=label_id, max_results=50
-                    )
-                    meta = gmail_fetch_metadata_batch(st.service, user_id=st.acct.user_id, message_ids=msg_ids)
-                except GmailError as e:
-                    self._reset_state(acct, reason=f"gmail_list_messages/metadata failed: {str(e)[:200]}")
-                    st = self._state(acct)
-                    try:
-                        msg_ids = gmail_list_message_ids(
-                            st.service, user_id=st.acct.user_id, label_id=label_id, max_results=50
-                        )
-                        meta = gmail_fetch_metadata_batch(st.service, user_id=st.acct.user_id, message_ids=msg_ids)
-                    except GmailError as e2:
-                        return self._error_listing(
-                            p,
-                            error=(
-                                "Gmail messages are temporarily unavailable.\n\n"
-                                f"Label: {label_id}\n"
-                                f"Error: {str(e2)[:600]}\n"
-                            ),
-                        )
-            entries = []
-            for mid in msg_ids:
-                m = meta.get(mid) or {"id": mid}
-                view = summarize_metadata(m)
-                date_part = "unknown-date"
-                if view.internal_date and len(view.internal_date) >= 10:
-                    date_part = view.internal_date[:10]
-                subj = view.subject.strip() if view.subject else ""
-                subj_slug = _snake_slug(subj or "message")
-                fname = f"{date_part}--{subj_slug}--{mid}.email.md"
-                entries.append(
-                    {
-                        "name": fname,
-                        "path": f"/fs/email/{acct}/labels/{label_id}/{fname}",
-                        "kind": "file",
-                        "size": None,
-                    }
-                )
-            return {"path": p, "entries": entries}
+            return self._list_messages(acct, p, label_id=label_id)
 
         raise RuntimeError("Unknown /fs/email path")
 
@@ -287,17 +308,27 @@ class EmailGmailProvider:
         if p == "/fs/email/README.md":
             return {"path": p, "content": _truncate_utf8(self._readme(), max_bytes)}
 
+        is_msg = False
+        message_id = ""
+        acct = ""
+
+        # /fs/email/<acct>/<inbox|starred|archive>/<file>
+        if len(rel) == 3 and rel[1] in ("inbox", "starred", "archive") and rel[2].endswith(".email.md"):
+            acct = rel[0]
+            message_id = rel[2].removesuffix(".email.md").split("--")[-1]
+            is_msg = True
+        
         # /fs/email/<acct>/labels/<labelId>/<file>
         if len(rel) == 4 and rel[1] == "labels" and rel[3].endswith(".email.md"):
             acct = rel[0]
             message_id = rel[3].removesuffix(".email.md").split("--")[-1]
+            is_msg = True
+
+        if is_msg:
             if not message_id:
                 raise RuntimeError("Invalid email filename (missing message id)")
 
             lock = self._lock_for(acct)
-            contended = lock.locked()
-            if contended:
-                pass
             with lock:
                 st = self._state(acct)
                 try:
@@ -318,6 +349,7 @@ class EmailGmailProvider:
                         }
             md = render_message_markdown(msg)
             return {"path": p, "content": _truncate_utf8(md, max_bytes)}
+            
         raise RuntimeError("Unknown /fs/email file")
 
     def write(self, path: str, *, content: str) -> dict[str, Any]:
@@ -325,6 +357,72 @@ class EmailGmailProvider:
         raise RuntimeError("Email provider is read-only")
 
     def move(self, from_path: str, to_path: str) -> dict[str, Any]:
-        _ = (from_path, to_path)
-        raise RuntimeError("Email provider is read-only")
+        p_from = from_path.rstrip("/")
+        p_to = to_path.rstrip("/")
+        
+        parts_from = _email_rel_parts(p_from)
+        parts_to = _email_rel_parts(p_to)
 
+        # Basic validation
+        if len(parts_from) < 2 or len(parts_to) < 2:
+            raise RuntimeError("Invalid move paths")
+        
+        acct_from = parts_from[0]
+        acct_to = parts_to[0]
+        if acct_from != acct_to:
+            raise RuntimeError("Cannot move emails between different accounts")
+
+        # Extract message ID from source filename
+        # Structure: <acct>/<folder>/<filename> or <acct>/labels/<lid>/<filename>
+        fname_from = parts_from[-1]
+        if not fname_from.endswith(".email.md"):
+             raise RuntimeError("Source is not an email file")
+        
+        mid = fname_from.removesuffix(".email.md").split("--")[-1]
+        if not mid:
+            raise RuntimeError("Could not parse message ID from source path")
+
+        # Determine target folder
+        # We only support moving to: inbox, starred, archive
+        # parts_to: [acct, folder, filename]
+        if len(parts_to) != 3:
+             raise RuntimeError("Target must be one of: inbox, starred, archive")
+        
+        target_folder = parts_to[1]
+        
+        add_ids = []
+        remove_ids = []
+
+        if target_folder == "inbox":
+            # Goal: in:inbox -is:starred
+            add_ids.append("INBOX")
+            remove_ids.append("STARRED")
+        elif target_folder == "starred":
+            # Goal: in:inbox is:starred
+            add_ids.append("INBOX")
+            add_ids.append("STARRED")
+        elif target_folder == "archive":
+            # Goal: -in:inbox
+            remove_ids.append("INBOX")
+            # We don't necessarily remove STARRED, as archive+starred is valid state (just not in 'archive' folder view which is -in:inbox)
+            # Standard Gmail 'Archive' button just removes INBOX label.
+        else:
+             raise RuntimeError(f"Moving to '{target_folder}' is not supported. Target must be inbox, starred, or archive.")
+
+        lock = self._lock_for(acct_from)
+        with lock:
+            st = self._state(acct_from)
+            try:
+                gmail_modify_message_labels(
+                    st.service, 
+                    user_id=st.acct.user_id, 
+                    message_id=mid,
+                    add_labels=add_ids,
+                    remove_labels=remove_ids
+                )
+            except GmailError as e:
+                if "scope" in str(e).lower() or "permission" in str(e).lower():
+                     raise RuntimeError(f"Failed to move message (check OAuth scopes?): {e}") from e
+                raise RuntimeError(f"Failed to move message: {e}") from e
+        
+        return {"from": from_path, "to": to_path, "status": "moved"}

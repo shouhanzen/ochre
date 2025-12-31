@@ -16,7 +16,7 @@ class GmailError(RuntimeError):
     pass
 
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
 
 def _b64url_decode(s: str) -> bytes:
@@ -103,6 +103,34 @@ def build_gmail_service(acct: GmailAccount):
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
+def gmail_modify_message_labels(
+    service,
+    *,
+    user_id: str,
+    message_id: str,
+    add_labels: list[str] | None = None,
+    remove_labels: list[str] | None = None,
+) -> dict[str, Any]:
+    try:
+        body = {}
+        if add_labels:
+            body["addLabelIds"] = add_labels
+        if remove_labels:
+            body["removeLabelIds"] = remove_labels
+        
+        if not body:
+            return {}
+
+        return (
+            service.users()
+            .messages()
+            .modify(userId=user_id, id=message_id, body=body)
+            .execute()
+        )
+    except Exception as e:
+        raise GmailError(f"Failed to modify message labels: {e}") from e
+
+
 def gmail_list_labels(service, *, user_id: str) -> list[dict[str, Any]]:
     try:
         resp = service.users().labels().list(userId=user_id).execute()
@@ -113,15 +141,21 @@ def gmail_list_labels(service, *, user_id: str) -> list[dict[str, Any]]:
 
 
 def gmail_list_message_ids(
-    service, *, user_id: str, label_id: str, max_results: int = 50
+    service,
+    *,
+    user_id: str,
+    label_ids: list[str] | None = None,
+    query: str | None = None,
+    max_results: int = 50,
 ) -> list[str]:
     try:
-        resp = (
-            service.users()
-            .messages()
-            .list(userId=user_id, labelIds=[label_id], maxResults=max_results)
-            .execute()
-        )
+        kwargs: dict[str, Any] = {"userId": user_id, "maxResults": max_results}
+        if label_ids:
+            kwargs["labelIds"] = label_ids
+        if query:
+            kwargs["q"] = query
+
+        resp = service.users().messages().list(**kwargs).execute()
         msgs = resp.get("messages") or []
         out: list[str] = []
         for m in msgs:

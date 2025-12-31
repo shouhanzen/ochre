@@ -10,6 +10,7 @@ You have access to filesystem tools over a unified namespace. Prefer using the f
 - Real mounts are under /fs/mnt/<mountName>/...
 - Todos are under /fs/todos/...
 - Notion kanban (virtual) is under /fs/kanban/notion/...
+- Email (Gmail) is under /fs/email/...
 
 Todo files use markdown checkboxes:
 - [ ] means not done
@@ -26,6 +27,7 @@ Important behaviors / constraints for Notion:
 - The Notion VFS is cached and may be slightly stale; use fs_list to discover current boards/statuses/cards.
 - Writes are staged locally (overlays) and do NOT immediately update Notion in the cloud.
 - To change a card's status, prefer moving it between status folders using fs_move(fromPath, toPath).
+- To manage emails (Zero Inbox), use fs_move(fromPath, toPath) between inbox/starred/archive folders.
 - Editing a card markdown file with fs_write updates the staged overlay for that card.
 - Do NOT claim changes are applied to Notion until the user approves/syncs them in the UI.
 

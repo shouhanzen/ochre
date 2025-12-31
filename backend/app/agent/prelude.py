@@ -7,6 +7,7 @@ from typing import Iterable, Optional
 from urllib.parse import quote
 
 from app.mounts import load_mounts
+from app.email.gmail_config import load_gmail_accounts
 from app.notion.cache import DEFAULT_BOARD_ID, get_overlay, list_boards, list_cards
 from app.notion.markdown import parse_card_doc
 from app.todos.store import Task, ensure_day, today_str
@@ -126,6 +127,56 @@ class VfsWorktreePrelude(PreludeProvider):
         root = m.root
         lines = _tree_lines(root, max_depth=4, max_entries=500)
         return "\n".join(lines)
+
+
+class EmailVfsPrelude(PreludeProvider):
+    title = "Email (Gmail VFS)"
+
+    def build(self) -> Optional[str]:
+        try:
+            accounts = load_gmail_accounts()
+            account_names = sorted(accounts.keys())
+        except Exception:
+            account_names = []
+
+        if not account_names:
+            # We keep this intentionally lightweight: just advertise the namespace and layout.
+            return "\n".join(
+                [
+                    "Root: /fs/email/",
+                    "Accounts: /fs/email/<account>/ (often /fs/email/gmail/)",
+                    "Labels: /fs/email/<account>/labels/",
+                    "Messages: /fs/email/<account>/labels/<labelId>/<...>.email.md",
+                    "",
+                    "Tip: use fs_list to enumerate labels, then list a label folder (e.g. INBOX) to see messages.",
+                ]
+            ).rstrip()
+
+        lines = [
+            "Root: /fs/email/",
+            "Accounts:",
+        ]
+        for name in account_names:
+            lines.append(f"  - {name} -> /fs/email/{name}/")
+        
+        lines.extend([
+            "",
+            "Folders:",
+            "  - inbox: Unstarred messages (process these!)",
+            "  - starred: Messages requiring follow-up",
+            "  - archive: Everything else (read-only view)",
+            "",
+            "Zero Inbox Strategy:",
+            "  - Process 'inbox' to zero.",
+            "  - Move important items to 'starred' using fs_move.",
+            "  - Move done items to 'archive' using fs_move.",
+            "",
+            "Labels: /fs/email/<account>/labels/",
+            "Messages: /fs/email/<account>/<folder>/<...>.email.md",
+            "",
+            "Tip: use fs_list to see contents.",
+        ])
+        return "\n".join(lines).rstrip()
 
 
 class TodosPrelude(PreludeProvider):
@@ -263,6 +314,7 @@ def build_context_prelude() -> str:
         NotionKanbanPrelude(),
         TodosPrelude(),
         VfsWorktreePrelude(),
+        EmailVfsPrelude(),
     ]
 
     parts: list[PreludePart] = []

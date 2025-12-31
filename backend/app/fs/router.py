@@ -80,6 +80,32 @@ def fs_write(path: str, *, content: str) -> dict[str, Any]:
     return res
 
 
+def fs_tree(path: str) -> str:
+    lines = []
+    root_name = path.rstrip("/").split("/")[-1] or path
+    lines.append(root_name)
+
+    def _walk(current_path: str, prefix: str):
+        try:
+            listing = fs_list(current_path)
+            entries = listing.get("entries", [])
+            entries.sort(key=lambda x: x["name"])
+        except Exception:
+            return
+
+        for i, entry in enumerate(entries):
+            is_last = (i == len(entries) - 1)
+            marker = "└── " if is_last else "├── "
+            lines.append(f"{prefix}{marker}{entry['name']}")
+
+            if entry.get("kind") == "dir":
+                extension = "    " if is_last else "│   "
+                _walk(entry["path"], prefix + extension)
+
+    _walk(path, "")
+    return "\n".join(lines)
+
+
 def fs_move(from_path: str, to_path: str) -> dict[str, Any]:
     src = _provider_for(from_path)
     dst = _provider_for(to_path)

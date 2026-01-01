@@ -22,10 +22,15 @@ def tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "fs_read",
-                "description": "Read a UTF-8 text file from a unified filesystem path.",
+                "description": "Read a UTF-8 text file (or list of files) from unified filesystem paths.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"path": {"type": "string"}, "max_bytes": {"type": "integer"}},
+                    "properties": {
+                        "path": {
+                            "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
+                        },
+                        "max_bytes": {"type": "integer"},
+                    },
                     "required": ["path"],
                 },
             },
@@ -46,10 +51,17 @@ def tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "fs_move",
-                "description": "Move/rename a path in the unified filesystem (used for e.g. moving Notion cards between status folders).",
+                "description": "Move/rename a path (or list of paths) in the unified filesystem.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"fromPath": {"type": "string"}, "toPath": {"type": "string"}},
+                    "properties": {
+                        "fromPath": {
+                            "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
+                        },
+                        "toPath": {
+                            "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
+                        }
+                    },
                     "required": ["fromPath", "toPath"],
                 },
             },

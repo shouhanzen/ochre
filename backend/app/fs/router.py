@@ -46,7 +46,17 @@ def fs_list(path: str) -> dict[str, Any]:
     return res
 
 
-def fs_read(path: str, *, max_bytes: int = 512_000) -> dict[str, Any]:
+def fs_read(path: str | list[str], *, max_bytes: int = 512_000) -> dict[str, Any] | list[dict[str, Any]]:
+    # Support bulk read
+    if isinstance(path, list):
+        results = []
+        for p_item in path:
+            try:
+                results.append(fs_read(p_item, max_bytes=max_bytes))
+            except Exception as e:
+                 results.append({"path": p_item, "error": str(e)})
+        return results
+
     p = _provider_for(path)
     res = p.read(path, max_bytes=max_bytes)
     try:
@@ -106,7 +116,26 @@ def fs_tree(path: str) -> str:
     return "\n".join(lines)
 
 
-def fs_move(from_path: str, to_path: str) -> dict[str, Any]:
+def fs_move(from_path: str | list[str], to_path: str | list[str]) -> dict[str, Any] | list[dict[str, Any]]:
+    # Support bulk move
+    # 1. from_path=list, to_path=list (parallel zip)
+    # 2. from_path=list, to_path=str (move all to directory) -> IMPL: simplified, just support 1:1 zip for now
+    
+    if isinstance(from_path, list) and isinstance(to_path, list):
+        if len(from_path) != len(to_path):
+             raise FsError("Batch move requires equal length from_path and to_path lists")
+        
+        results = []
+        for f, t in zip(from_path, to_path):
+            try:
+                results.append(fs_move(f, t))
+            except Exception as e:
+                results.append({"from": f, "to": t, "error": str(e)})
+        return results
+
+    if isinstance(from_path, list) or isinstance(to_path, list):
+         raise FsError("Batch move requires both fromPath and toPath to be lists of equal length")
+
     src = _provider_for(from_path)
     dst = _provider_for(to_path)
     if type(src) is not type(dst):

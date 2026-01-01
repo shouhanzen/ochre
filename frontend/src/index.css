@@ -38,8 +38,10 @@ body {
   position: fixed;
   inset: 0;
   height: var(--ochre-vh, 100dvh);
-  width: var(--ochre-vw, 100vw);
-  transform: translate3d(var(--ochre-vv-left, 0px), var(--ochre-vv-top, 0px), 0);
+  /* Avoid horizontal “panning” issues from visualViewport.offsetLeft (can hide right-side tabs). */
+  width: 100vw;
+  width: 100dvw;
+  transform: translate3d(0, var(--ochre-vv-top, 0px), 0);
   display: grid;
   grid-template-rows: auto 1fr auto;
 }
@@ -94,6 +96,8 @@ body {
   border-top: 1px solid var(--vscode-border);
   background: var(--vscode-sideBar-background);
   padding: 6px 6px calc(6px + env(safe-area-inset-bottom)) 6px;
+  width: 100%;
+  box-sizing: border-box;
 }
 .mobileTabButton {
   appearance: none;
@@ -107,6 +111,7 @@ body {
   gap: 4px;
   cursor: pointer;
   min-height: 44px;
+  min-width: 0;
 }
 .mobileTabButton.active {
   color: var(--vscode-foreground);
@@ -119,6 +124,10 @@ body {
 .mobileTabLabel {
   font-size: 11px;
   line-height: 1;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .appShell {
@@ -437,7 +446,8 @@ body {
 .chatLog {
   flex: 1;
   padding: 8px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -594,6 +604,7 @@ body {
 }
 .chatContent {
   white-space: pre-wrap;
+  word-break: break-word;
   line-height: 1.45;
   font-size: 13px;
 }

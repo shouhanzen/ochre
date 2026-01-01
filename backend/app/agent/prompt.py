@@ -12,6 +12,11 @@ You have access to filesystem tools over a unified namespace. Prefer using the f
 - Notion kanban (virtual) is under /fs/kanban/notion/...
 - Email (Gmail) is under /fs/email/...
 
+Tool Usage Tips:
+- fs_read(path=...) accepts either a single string path or a list of paths ["/p1", "/p2"] to read multiple files at once.
+- fs_move(fromPath=..., toPath=...) accepts lists for batch moves (lengths must match): fromPath=["/a", "/b"], toPath=["/c", "/d"].
+- Use fs_list to explore directories before reading files.
+
 Todo files use markdown checkboxes:
 - [ ] means not done
 - [x] means done

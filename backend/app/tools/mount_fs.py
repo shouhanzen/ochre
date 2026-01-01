@@ -586,14 +586,23 @@ async def _fs_list(args: dict[str, Any]) -> Any:
 
 
 async def _fs_read(args: dict[str, Any]) -> Any:
-    return fs_read(str(args.get("path", "")), max_bytes=int(args.get("max_bytes", 512_000)))
+    # 'path' can be str or list[str]
+    path_arg = args.get("path")
+    if not path_arg:
+        raise ValueError("Missing path argument")
+    return fs_read(path_arg, max_bytes=int(args.get("max_bytes", 512_000)))
 
 
 async def _fs_write(args: dict[str, Any]) -> Any:
     return fs_write(str(args.get("path", "")), content=str(args.get("content", "")))
 
 async def _fs_move(args: dict[str, Any]) -> Any:
-    return fs_move(str(args.get("fromPath", "")), str(args.get("toPath", "")))
+    # 'fromPath' and 'toPath' can be str or list[str]
+    from_arg = args.get("fromPath")
+    to_arg = args.get("toPath")
+    if not from_arg or not to_arg:
+         raise ValueError("Missing fromPath or toPath argument")
+    return fs_move(from_arg, to_arg)
 
 
 def tool_handlers() -> dict[str, ToolFunc]:

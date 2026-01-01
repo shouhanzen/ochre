@@ -69,6 +69,7 @@ async def chat_completions_stream(
         "messages": messages,
         "temperature": temperature,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
     if tools is not None:
         payload["tools"] = tools

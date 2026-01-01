@@ -24,6 +24,7 @@ async def stream_once(
     model: str,
     messages: list[dict[str, Any]],
     on_delta: Callable[[str], Any],
+    on_usage: Optional[Callable[[dict[str, Any]], Any]] = None,
     cancel_event: asyncio.Event,
 ) -> StreamResult:
     """
@@ -37,6 +38,12 @@ async def stream_once(
     async for frame in chat_completions_stream(model=model, messages=messages, tools=tool_specs(), tool_choice="auto"):
         if cancel_event.is_set():
             break
+        
+        # Check for usage stats (OpenRouter/OpenAI often send this in the last chunk or a separate chunk)
+        if "usage" in frame and frame["usage"]:
+            if on_usage:
+                on_usage(frame["usage"])
+
         choice = (frame.get("choices") or [{}])[0]
         delta = choice.get("delta") or {}
         finish_reason = choice.get("finish_reason") or finish_reason
@@ -84,16 +91,21 @@ async def run_tool_loop_streaming(
     Streaming tool loop. Emits events via on_event:
     - chat.delta
     - tool.start/tool.end
+    - chat.usage
     Returns final assistant text and the full message list (including tool messages) for persistence.
     """
     msgs = ensure_system_prompt(list(base_messages))
     accumulated_final: list[str] = []
 
     for _ in range(max_steps):
+        def _on_usage(u: dict[str, Any]) -> None:
+            on_event({"type": "chat.usage", "payload": u})
+
         result = await stream_once(
             model=model,
             messages=msgs,
             on_delta=lambda t: (accumulated_final.append(t), on_event({"type": "chat.delta", "payload": {"text": t}})),
+            on_usage=_on_usage,
             cancel_event=cancel_event,
         )
 

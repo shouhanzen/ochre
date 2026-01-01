@@ -15,6 +15,15 @@ type ChatMsg = {
   meta?: Record<string, unknown>
 }
 
+function formatTokenCount(n: any): string {
+  const num = Number(n)
+  if (!Number.isFinite(num)) return ''
+  if (num >= 1000) {
+    return (num / 1000).toFixed(1) + 'k'
+  }
+  return String(num)
+}
+
 function formatChatTranscript(msgs: ChatMsg[]): string {
   const parts: string[] = []
   for (const it of groupRenderItems(msgs)) {
@@ -270,10 +279,11 @@ function Markdown({ text }: { text: string }) {
   )
 }
 
-export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mobile' }) {
+import { ChatComposer } from './ChatComposer'
+
+export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mobile'; onNewConversation?: () => Promise<void> | void }) {
   const isMobile = props.variant === 'mobile'
   const [messages, setMessages] = useState<ChatMsg[]>([])
-  const [draft, setDraft] = useState('')
   const [streaming, setStreaming] = useState(false)
   const streamingRef = useRef(false)
   const [connecting, setConnecting] = useState(false)
@@ -290,11 +300,19 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
   const waitingForStartedRef = useRef<string | null>(null)
   const waitingForFirstTokenRef = useRef<string | null>(null)
 
-  const canSend = useMemo(() => draft.trim().length > 0 && !streaming, [draft, streaming])
-
   useEffect(() => {
     streamingRef.current = streaming
   }, [streaming])
+
+  // Limit rendering to the last 10 messages (approx) to improve performance.
+  // We use a simple slice, but we need to be careful not to split a tool group in half (visual glitch).
+  // groupRenderItems handles grouping, so let's slice *after* grouping? 
+  // Slicing after grouping is safer for tool groups.
+  const allRenderItems = useMemo(() => groupRenderItems(messages), [messages])
+  const renderedItems = useMemo(() => {
+     if (allRenderItems.length <= 10) return allRenderItems
+     return allRenderItems.slice(allRenderItems.length - 10)
+  }, [allRenderItems])
 
   useEffect(() => {
     const sid = props.sessionId
@@ -442,6 +460,26 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
       } else if (f.type === 'system.message') {
         const c = String(f.payload?.content ?? '')
         if (c.trim()) setMessages((prev) => [...prev, { role: 'system', content: c, ts: new Date().toISOString() }])
+      } else if (f.type === 'chat.usage') {
+        const u = f.payload as any
+        const rid = String(f.requestId ?? activeRequestIdRef.current ?? '')
+        setMessages((prev) => {
+          const copy = prev.slice()
+          // Find the assistant message for this request (usually the last one)
+          let idx = -1
+          for (let i = copy.length - 1; i >= 0; i--) {
+            if (copy[i].role === 'assistant' && copy[i].requestId === rid) {
+              idx = i
+              break
+            }
+          }
+          if (idx >= 0) {
+            const m = copy[idx]
+            copy[idx] = { ...m, meta: { ...m.meta, usage: u } }
+            return copy
+          }
+          return copy
+        })
       } else if (f.type === 'tool.start') {
         const tool = String(f.payload?.tool ?? 'tool')
         const args = String(f.payload?.argsPreview ?? '')
@@ -485,12 +523,11 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
     return () => s.close()
   }, [props.sessionId])
 
-  async function onSend() {
-    if (!canSend) return
+  async function onSend(content: string) {
+    if (streaming) return
     if (!props.sessionId) return
     setError(null)
-    const userMsg: ChatMsg = { role: 'user', content: draft.trim(), ts: new Date().toISOString() }
-    setDraft('')
+    const userMsg: ChatMsg = { role: 'user', content: content.trim(), ts: new Date().toISOString() }
     const { id: requestId } = safeRandomUUID()
     waitingForStartedRef.current = requestId
     waitingForFirstTokenRef.current = null
@@ -553,6 +590,11 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
         <div className="panelTitle">Chat</div>
         {isMobile ? null : <div className="muted">Backend default model</div>}
         <div className="row">
+          {props.onNewConversation ? (
+            <button className="button secondary" onClick={() => void props.onNewConversation?.()}>
+              New conversation
+            </button>
+          ) : null}
           <button className="button secondary" disabled={!props.sessionId || messages.length === 0} onClick={() => void onCopyConversation()}>
             {copied ? 'Copied' : 'Copy conversation'}
           </button>
@@ -564,7 +606,12 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
         {messages.length === 0 ? (
           <div className="muted">Ask the agent to view/edit `/fs/todos/today.md` or `/fs/mnt/workspace/...`.</div>
         ) : null}
-        {groupRenderItems(messages).map((it) => {
+        {messages.length > 0 && renderedItems.length < allRenderItems.length ? (
+            <div className="muted" style={{ marginBottom: 10, textAlign: 'center' }}>
+              (Showing last 10 items)
+            </div>
+        ) : null}
+        {renderedItems.map((it) => {
           if (it.kind === 'msg') {
             const m = it.msg
             return (
@@ -572,6 +619,11 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
                 <div className="chatLineHeader">
                   <span className="chatRole">{m.role}</span>
                   {m.ts ? <span className="chatTs">{m.ts}</span> : null}
+                  {(m.meta as any)?.usage ? (
+                    <span className="muted" style={{ marginLeft: 'auto', fontSize: '11px' }}>
+                      {formatTokenCount((m.meta as any).usage.total_tokens)} tokens
+                    </span>
+                  ) : null}
                 </div>
                 <div className="chatContent md">
                   <Markdown text={m.content} />
@@ -630,31 +682,13 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
 
       {error ? <div className="error">{error}</div> : null}
 
-      <div className={isMobile ? 'chatComposer compact' : 'chatComposer'}>
-        <textarea
-          className="textarea"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={props.sessionId ? 'Send a message…' : 'Waiting for session…'}
-          rows={isMobile ? 1 : 3}
-          inputMode="text"
-          enterKeyHint="send"
-          autoComplete={isMobile ? 'off' : undefined}
-          autoCorrect={isMobile ? 'off' : undefined}
-          autoCapitalize={isMobile ? 'none' : undefined}
-          spellCheck={isMobile ? false : undefined}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              void onSend()
-            }
-          }}
-          disabled={!props.sessionId}
-        />
-        <button className="button" disabled={!props.sessionId || !canSend} onClick={onSend}>
-          {streaming ? 'Sending…' : 'Send'}
-        </button>
-      </div>
+      <ChatComposer
+        sessionId={props.sessionId}
+        isMobile={isMobile}
+        canSend={!streaming}
+        streaming={streaming}
+        onSend={onSend}
+      />
     </div>
   )
 }

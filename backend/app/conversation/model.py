@@ -173,6 +173,9 @@ class ConversationModel:
                 if et == "assistant.tool_calls":
                     self._on_assistant_tool_calls(request_id=request_id, tool_calls=payload.get("toolCalls"))
                     return
+                if et == "chat.usage":
+                    self._on_chat_usage(request_id=request_id, usage=payload)
+                    return
                 if et == "tool.start":
                     self._on_tool_start(
                         request_id=request_id,
@@ -303,6 +306,25 @@ class ConversationModel:
             )
         except Exception:
             pass
+
+    def _on_chat_usage(self, *, request_id: str, usage: dict[str, Any]) -> None:
+        asyncio.create_task(
+            send(self.session_id, {"type": "chat.usage", "requestId": request_id, "payload": usage})
+        )
+        ar = self.active_run
+        if ar is None or ar.request_id != request_id or ar.status != "running":
+            return
+        # If we have an open assistant message, attach usage stats to it.
+        # This persists the token count for history.
+        if ar.open_assistant is not None:
+            try:
+                update_message_content(
+                    ar.open_assistant.message_id,
+                    content=ar.open_assistant.buffer_text,
+                    meta={"usage": usage},
+                )
+            except Exception:
+                pass
 
     def _on_tool_start(self, *, request_id: str, tool: str, tc_id: str, args_preview: str) -> None:
         ar = self.active_run

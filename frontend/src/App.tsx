@@ -1,4 +1,4 @@
-  import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel } from './components/ChatPanel'
 import { ActivityBar } from './components/ActivityBar'
 import { Editor } from './components/Editor'
@@ -246,6 +246,109 @@ export default function App() {
     }
   }, [])
 
+  function handleSelectFile(path: string) {
+    if (openFiles.includes(path)) {
+      setSelectedPath(path)
+    } else {
+      setEphemeralFile(path)
+      setSelectedPath(path)
+    }
+  }
+
+  function handleOpenFile(path: string) {
+    if (!openFiles.includes(path)) {
+      setOpenFiles((prev) => [path, ...prev])
+    }
+    setEphemeralFile(null)
+    setSelectedPath(path)
+  }
+
+  function handleCloseFile(path: string) {
+    if (dirtyFiles.has(path)) {
+      if (!confirm('Unsaved changes. Close anyway?')) return
+      setDirtyFiles((prev) => {
+        const next = new Set(prev)
+        next.delete(path)
+        return next
+      })
+    }
+
+    const idx = openFiles.indexOf(path)
+    if (idx !== -1) {
+      const nextOpen = openFiles.filter((p) => p !== path)
+      setOpenFiles(nextOpen)
+      if (selectedPath === path) {
+        if (nextOpen.length === 0) {
+          setSelectedPath(ephemeralFile ?? undefined)
+        } else {
+          const nextIdx = Math.max(0, idx - 1)
+          setSelectedPath(nextOpen[nextIdx] ?? nextOpen[0])
+        }
+      }
+    } else if (path === ephemeralFile) {
+      setEphemeralFile(null)
+      if (selectedPath === path) {
+        if (openFiles.length > 0) setSelectedPath(openFiles[openFiles.length - 1])
+        else setSelectedPath(undefined)
+      }
+    }
+  }
+
+  function handleContentChange(path: string) {
+    setDirtyFiles((prev) => {
+      const next = new Set(prev)
+      next.add(path)
+      return next
+    })
+    if (ephemeralFile === path) {
+      if (!openFiles.includes(path)) {
+        setOpenFiles((prev) => [path, ...prev])
+      }
+      setEphemeralFile(null)
+    }
+  }
+
+  function handleSaved(path: string) {
+    setDirtyFiles((prev) => {
+      const next = new Set(prev)
+      next.delete(path)
+      return next
+    })
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        editorActions.current?.save()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  function handleToggleViewMode(path: string) {
+    setFileViewModes((prev) => {
+      const current = prev[path] ?? (path.endsWith('.todo.md') || path.endsWith('.task.md') ? 'preview' : 'source')
+      return { ...prev, [path]: current === 'preview' ? 'source' : 'preview' }
+    })
+  }
+
+  const currentViewMode = useMemo(() => {
+    if (!selectedPath) return 'source'
+    return (
+      fileViewModes[selectedPath] ??
+      (selectedPath.endsWith('.todo.md') || selectedPath.endsWith('.task.md') ? 'preview' : 'source')
+    )
+  }, [selectedPath, fileViewModes])
+
+  const displayedFiles = useMemo(() => {
+    if (ephemeralFile && !openFiles.includes(ephemeralFile)) {
+      return [ephemeralFile, ...openFiles]
+    }
+    return openFiles
+  }, [openFiles, ephemeralFile])
+
   if (isMobile) {
     return (
       <div className={keyboardOpen ? 'mobileShell keyboardOpen' : 'mobileShell'}>
@@ -355,109 +458,6 @@ export default function App() {
       </div>
     )
   }
-
-  function handleSelectFile(path: string) {
-    if (openFiles.includes(path)) {
-      setSelectedPath(path)
-    } else {
-      setEphemeralFile(path)
-      setSelectedPath(path)
-    }
-  }
-
-  function handleOpenFile(path: string) {
-    if (!openFiles.includes(path)) {
-      setOpenFiles((prev) => [path, ...prev])
-    }
-    setEphemeralFile(null)
-    setSelectedPath(path)
-  }
-
-  function handleCloseFile(path: string) {
-    if (dirtyFiles.has(path)) {
-      if (!confirm('Unsaved changes. Close anyway?')) return
-      setDirtyFiles((prev) => {
-        const next = new Set(prev)
-        next.delete(path)
-        return next
-      })
-    }
-
-    const idx = openFiles.indexOf(path)
-    if (idx !== -1) {
-      const nextOpen = openFiles.filter((p) => p !== path)
-      setOpenFiles(nextOpen)
-      if (selectedPath === path) {
-        if (nextOpen.length === 0) {
-          setSelectedPath(ephemeralFile ?? undefined)
-        } else {
-          const nextIdx = Math.max(0, idx - 1)
-          setSelectedPath(nextOpen[nextIdx] ?? nextOpen[0])
-        }
-      }
-    } else if (path === ephemeralFile) {
-      setEphemeralFile(null)
-      if (selectedPath === path) {
-        if (openFiles.length > 0) setSelectedPath(openFiles[openFiles.length - 1])
-        else setSelectedPath(undefined)
-      }
-    }
-  }
-
-  function handleContentChange(path: string) {
-    setDirtyFiles((prev) => {
-      const next = new Set(prev)
-      next.add(path)
-      return next
-    })
-    if (ephemeralFile === path) {
-      if (!openFiles.includes(path)) {
-        setOpenFiles((prev) => [path, ...prev])
-      }
-      setEphemeralFile(null)
-    }
-  }
-
-  function handleSaved(path: string) {
-    setDirtyFiles((prev) => {
-      const next = new Set(prev)
-      next.delete(path)
-      return next
-    })
-  }
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault()
-        editorActions.current?.save()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  function handleToggleViewMode(path: string) {
-    setFileViewModes((prev) => {
-      const current = prev[path] ?? (path.endsWith('.todo.md') || path.endsWith('.task.md') ? 'preview' : 'source')
-      return { ...prev, [path]: current === 'preview' ? 'source' : 'preview' }
-    })
-  }
-
-  const currentViewMode = useMemo(() => {
-    if (!selectedPath) return 'source'
-    return (
-      fileViewModes[selectedPath] ??
-      (selectedPath.endsWith('.todo.md') || selectedPath.endsWith('.task.md') ? 'preview' : 'source')
-    )
-  }, [selectedPath, fileViewModes])
-
-  const displayedFiles = useMemo(() => {
-    if (ephemeralFile && !openFiles.includes(ephemeralFile)) {
-      return [ephemeralFile, ...openFiles]
-    }
-    return openFiles
-  }, [openFiles, ephemeralFile])
 
   return (
     <div className="vscodeShell">

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import unicodedata
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 import threading
 
+from app.fs.skills import Skill, SkillsMixin
 from app.email.gmail_client import (
     GmailError,
     build_gmail_service,
@@ -85,7 +86,7 @@ class _AcctState:
     service: Any
 
 
-class EmailGmailProvider:
+class EmailGmailProvider(SkillsMixin):
     """
     Read-only Gmail provider mounted at /fs/email.
     """
@@ -99,6 +100,81 @@ class EmailGmailProvider:
 
     def can_handle(self, path: str) -> bool:
         return path == "/fs/email" or path == "/fs/email/" or path.startswith("/fs/email/")
+
+    def get_skills(self) -> Iterable[Skill]:
+        return [
+            Skill(
+                name="manage_email",
+                description="Read and organize emails (Zero Inbox). Use when user asks to check email or triage inbox.",
+                content="""---
+name: manage_email
+description: Read and organize emails (Zero Inbox).
+---
+
+# Manage Email
+
+Access Gmail accounts via `/fs/email/`.
+
+## Structure
+- `/fs/email/<account>/inbox/`: Messages to process (Goal: Empty this)
+- `/fs/email/<account>/starred/`: **Burn Stack** (Action items, To-Read, Waiting, Reference)
+- `/fs/email/<account>/archive/`: Done/Noise (Read-only view)
+- `/fs/email/<account>/labels/`: Access by label
+
+## Zero Inbox Strategy
+
+### 1. Triage Rules
+- **Star (Move to Starred)**:
+  - **Actionable**: Needs reply, decision, payment, scheduling.
+  - **Reading**: Newsletters/content you *actually* want to read.
+  - **Reference**: Info needed soon.
+  - **"Maybe"**: Keep if unsure (keeps inbox clear).
+- **Archive (Move to Archive)**:
+  - **Noise**: FYI, notifications, status updates.
+  - **Receipts**: Unless actionable.
+  - **Unwanted Content**: Newsletters you won't read.
+  - **Resolved**: Finished threads.
+
+### 2. Newsletter/Content Workflow
+To prevent clogging the inbox:
+1. **Scan**: Identify content/newsletters in Inbox.
+2. **Digest**: Generate a summary list for the user (Subject, Sender, 1-3 bullet summary, File path).
+3. **Selection**: Ask user which to keep.
+4. **Execution**: **Star** the kept ones (Burn Stack), **Archive** the rest.
+
+## Operations
+- **List Inbox**: `fs_list("/fs/email/<account>/inbox")`
+- **Read**: `fs_read` an email file.
+- **Archive**: `fs_move(path_in_inbox, path_in_archive)`
+- **Star**: `fs_move(path_in_inbox, path_in_starred)`
+
+**Note**: You cannot write/send emails, only organize them.
+""",
+            )
+        ]
+
+    def get_context_description(self) -> str | None:
+        try:
+            accounts = load_gmail_accounts()
+            account_names = sorted(accounts.keys())
+        except Exception:
+            account_names = []
+
+        if not account_names:
+            return None
+
+        lines = [
+            "Email (Gmail):",
+            "Accounts:",
+        ]
+        for name in account_names:
+            lines.append(f"  - {name} -> /fs/email/{name}/")
+        
+        lines.extend([
+            "Folders: inbox, starred, archive",
+            "Tip: use fs_move to archive/star emails.",
+        ])
+        return "\n".join(lines).rstrip()
 
     def _accounts(self) -> dict[str, GmailAccount]:
         return load_gmail_accounts()
@@ -220,6 +296,10 @@ class EmailGmailProvider:
         return {"path": path, "entries": entries}
 
     def list(self, path: str) -> dict[str, Any]:
+        skills_res = self._handle_skills_list(path, self.get_skills())
+        if skills_res:
+            return skills_res
+
         p = path.rstrip("/") or "/fs/email"
         rel = _email_rel_parts(p)
 
@@ -298,6 +378,10 @@ class EmailGmailProvider:
         raise RuntimeError("Unknown /fs/email path")
 
     def read(self, path: str, *, max_bytes: int = 512_000) -> dict[str, Any]:
+        skills_res = self._handle_skills_read(path, self.get_skills())
+        if skills_res:
+            return skills_res
+
         p = path.rstrip("/") or path
         rel = _email_rel_parts(p)
 

@@ -140,10 +140,21 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 34px;
-  padding: 0 10px;
+  height: 100%;
+  min-height: 34px;
+  box-sizing: border-box;
+  padding-left: calc(env(titlebar-area-x, 0px) + 10px);
+  padding-right: calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100%) + 10px);
   border-bottom: 1px solid var(--vscode-border);
   background: var(--vscode-titleBar-background);
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.topBar button,
+.topBar .no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .brand {
@@ -164,12 +175,12 @@ body {
 .vscodeShell {
   height: 100%;
   display: grid;
-  grid-template-rows: 34px 1fr 22px;
+  grid-template-rows: env(titlebar-area-height, 34px) 1fr 22px;
 }
 .vscodeMain {
   min-height: 0;
   display: grid;
-  grid-template-columns: 48px 300px 1fr 420px;
+  grid-template-columns: 48px 300px minmax(0, 1fr) 420px;
 }
 .activityBar {
   background: var(--vscode-activityBar-background);
@@ -213,6 +224,7 @@ body {
 .editorRegion {
   background: var(--vscode-editor-background);
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
@@ -224,6 +236,7 @@ body {
   flex-direction: column;
   gap: 0;
   padding: 0;
+  position: relative; /* For floating chat composer */
 }
 
 /* Make primary panes fill vertical space like VS Code */
@@ -390,11 +403,111 @@ body {
   white-space: nowrap;
 }
 
+/* Editor Tabs */
+.editorTabsContainer {
+  display: flex;
+  background: var(--vscode-sideBar-background); /* Match title bar or sidebar bg */
+  border-bottom: 1px solid var(--vscode-border);
+  min-height: 35px;
+  flex-shrink: 0;
+  width: 100%;
+}
+
+.editorTabs {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+  flex: 1;
+  min-width: 0;
+}
+.editorTabs::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
+.editorTab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  min-width: 120px;
+  max-width: 200px;
+  height: 35px;
+  font-size: 13px;
+  color: var(--vscode-foreground-muted);
+  background: #2d2d2d; /* Inactive tab bg */
+  border-right: 1px solid var(--vscode-border-subtle);
+  cursor: pointer;
+  user-select: none;
+}
+.editorTab:hover {
+  background: #2a2d2e; /* Slightly lighter on hover */
+}
+.editorTab.active {
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  border-top: 1px solid var(--vscode-focusBorder); /* Optional accent line */
+}
+.editorTab.ephemeral {
+  font-style: italic;
+  border-top: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.editorTabLabel {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editorTabClose {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 16px;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0; /* Hidden by default until hover */
+}
+.editorTab:hover .editorTabClose,
+.editorTab.active .editorTabClose,
+.editorTabClose.dirty {
+  opacity: 1;
+}
+.editorTabClose:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+.editorTabClose.dirty {
+  font-size: 10px;
+}
+
+.editorSave {
+  margin-left: auto;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  flex-shrink: 0;
+  border-left: 1px solid var(--vscode-border);
+  background: var(--vscode-sideBar-background);
+}
+.editorSave button {
+  padding: 4px 10px;
+  font-size: 12px;
+  height: 24px;
+}
+
 /* Editor */
 .editor {
   flex: 1;
   padding: 0;
   overflow: hidden;
+  border-top: 1px solid var(--vscode-border); /* Separator between tabs and editor */
 }
 .editorArea {
   height: 100%;
@@ -445,7 +558,7 @@ body {
 /* Chat */
 .chatLog {
   flex: 1;
-  padding: 8px;
+  padding: 8px 8px 8px 8px;
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
@@ -605,8 +718,8 @@ body {
 .chatContent {
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.45;
-  font-size: 13px;
+  line-height: 1.5;
+  font-size: 15px;
 }
 .chatContent.md {
   white-space: normal;
@@ -643,7 +756,7 @@ body {
   margin: 8px 0;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.35;
   background: rgba(0, 0, 0, 0.22);
   border: 1px solid var(--vscode-border-subtle);
@@ -653,7 +766,7 @@ body {
 }
 .mdCode {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-  font-size: 12px;
+  font-size: 13px;
 }
 .chatContent.md :not(pre) > .mdCode {
   background: rgba(0, 0, 0, 0.22);
@@ -662,25 +775,35 @@ body {
   padding: 1px 6px;
 }
 .chatComposer {
-  border-top: 1px solid var(--vscode-border);
+  width: min(720px, calc(100% - 32px));
+  border: 1px solid var(--vscode-border);
+  border-radius: 8px;
   background: var(--vscode-sideBar-background);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   padding: 8px;
-  display: grid;
-  grid-template-columns: 1fr 110px;
+  display: flex;
   gap: 10px;
+  align-items: flex-end;
+  z-index: 20;
+  margin: 0 auto 16px auto;
+  flex-shrink: 0;
 }
 
 /* Mobile chat composer: default to a single-line input feel */
 .chatComposer.compact {
-  grid-template-columns: 1fr 88px;
-  gap: 8px;
+  margin-bottom: 10px;
+  width: calc(100% - 20px);
 }
 .chatComposer .textarea {
-  resize: none; /* resizing chat input is rarely useful (especially on mobile) */
+  resize: none;
+  border: 0;
+  background: transparent;
+  padding: 8px 4px;
+  min-height: 24px;
+  max-height: 120px; /* Limit height if content grows too much */
 }
-.chatComposer.compact .textarea {
-  padding: 10px 10px;
-  line-height: 1.2;
+.chatComposer .textarea:focus {
+  outline: none;
 }
 
 

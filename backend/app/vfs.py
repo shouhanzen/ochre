@@ -45,22 +45,22 @@ def vfs_list(path: str) -> dict[str, Any]:
     if path in ("/fs/todos",):
         days = _list_todo_files()
         entries = [
-            {"name": "template.md", "path": "/fs/todos/template.md", "kind": "file", "size": None},
-            {"name": "today.md", "path": "/fs/todos/today.md", "kind": "file", "size": None},
+            {"name": "template.todo.md", "path": "/fs/todos/template.todo.md", "kind": "file", "size": None},
+            {"name": "today.todo.md", "path": "/fs/todos/today.todo.md", "kind": "file", "size": None},
         ]
         for day in days:
-            entries.append({"name": f"{day}.md", "path": f"/fs/todos/{day}.md", "kind": "file", "size": None})
+            entries.append({"name": f"{day}.todo.md", "path": f"/fs/todos/{day}.todo.md", "kind": "file", "size": None})
         return {"path": path, "entries": entries}
 
     raise VfsError("Unknown virtual directory")
 
 
 def _day_from_todo_md_path(path: str) -> str:
-    if path == "/fs/todos/today.md":
+    if path == "/fs/todos/today.todo.md":
         return today_str()
-    if path.startswith("/fs/todos/") and path.endswith(".md"):
+    if path.startswith("/fs/todos/") and path.endswith(".todo.md"):
         name = path.split("/")[-1]
-        day = name[:-3]
+        day = name[:-8]  # remove .todo.md
         if len(day) == 10 and day[4] == "-" and day[7] == "-":
             return day
     raise VfsError("Unsupported todo file path")
@@ -68,36 +68,33 @@ def _day_from_todo_md_path(path: str) -> str:
 
 def vfs_read(path: str) -> dict[str, Any]:
     path = _normalize(path)
-    if path == "/fs/todos/template.md":
+    if path == "/fs/todos/template.todo.md":
         # allow reading template directly from disk
         if not template_path().exists():
             ensure_day(today_str())
         return {"path": path, "content": template_path().read_text(encoding="utf-8")}
 
-    if path.startswith("/fs/todos/") and path.endswith(".md"):
+    if path.startswith("/fs/todos/") and path.endswith(".todo.md"):
         day = _day_from_todo_md_path(path)
-        tasks = ensure_day(day)
-        return {"path": path, "content": render_markdown(day, tasks)}
+        tasks, notes = ensure_day(day)
+        return {"path": path, "content": render_markdown(day, tasks, notes)}
 
     raise VfsError("Unknown virtual file")
 
 
 def vfs_write(path: str, *, content: str) -> dict[str, Any]:
     path = _normalize(path)
-    if path == "/fs/todos/template.md":
+    if path == "/fs/todos/template.todo.md":
         template_path().parent.mkdir(parents=True, exist_ok=True)
         template_path().write_text(content, encoding="utf-8")
         return {"path": path, "ok": True}
 
-    if path.startswith("/fs/todos/") and path.endswith(".md"):
+    if path.startswith("/fs/todos/") and path.endswith(".todo.md"):
         day = _day_from_todo_md_path(path)
         try:
-            tasks = apply_markdown_edit(day, content)
+            tasks, _notes = apply_markdown_edit(day, content)
         except TodoError as e:
             raise VfsError(str(e)) from e
         return {"path": path, "ok": True, "task_count": len(tasks)}
 
     raise VfsError("Unknown virtual file")
-
-
-

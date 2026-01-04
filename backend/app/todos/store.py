@@ -38,7 +38,7 @@ def data_dir() -> Path:
 
 
 def template_path() -> Path:
-    return data_dir() / "template.md"
+    return data_dir() / "template.todo.md"
 
 
 def day_json_path(day: str) -> Path:
@@ -59,7 +59,7 @@ def ensure_template_exists() -> None:
     if p.exists():
         return
     p.write_text(
-        "# Template\n\n- [ ] Review today’s priorities\n- [ ] Triage inbox\n- [ ] One meaningful task\n",
+        "# Template\n\n- [ ] Review today’s priorities\n- [ ] Triage inbox\n- [ ] One meaningful task\n\n## Notes\n",
         encoding="utf-8",
     )
 
@@ -82,22 +82,40 @@ def parse_markdown_tasks(md: str) -> list[tuple[Optional[str], str, bool]]:
     return out
 
 
-def render_markdown(day: str, tasks: list[Task]) -> str:
+def extract_notes_content(md: str) -> str:
+    # We look for a line that is exactly "## Notes" or starts with "## Notes"
+    # For simplicity, let's split on "\n## Notes"
+    if "\n## Notes" in md:
+        _, notes = md.split("\n## Notes", 1)
+        return notes.strip()
+    return ""
+
+
+def render_markdown(day: str, tasks: list[Task], notes: str) -> str:
     lines = [f"# Todos: {day}", ""]
     for t in tasks:
         box = "x" if t.done else " "
         lines.append(f"- [{box}] {t.text} <!-- id:{t.id} -->")
+    
+    if notes:
+        lines.append("")
+        lines.append("## Notes")
+        lines.append(notes)
+    elif not tasks and not notes:
+        lines.append("(No tasks)")
+    
     lines.append("")
     return "\n".join(lines)
 
 
-def load_day(day: str) -> list[Task]:
+def load_day(day: str) -> tuple[list[Task], str]:
     _ensure_dirs()
     p = day_json_path(day)
     if not p.exists():
         ensure_day(day)
     raw = json.loads(p.read_text(encoding="utf-8"))
     tasks_raw = raw.get("tasks") or []
+    notes = raw.get("notes") or ""
     tasks: list[Task] = []
     for t in tasks_raw:
         tasks.append(
@@ -109,16 +127,20 @@ def load_day(day: str) -> list[Task]:
                 updated_at=str(t.get("updated_at") or _now_iso()),
             )
         )
-    return tasks
+    return tasks, notes
 
 
-def save_day(day: str, tasks: list[Task]) -> None:
+def save_day(day: str, tasks: list[Task], notes: str) -> None:
     _ensure_dirs()
-    payload = {"day": day, "tasks": [asdict(t) for t in tasks]}
+    payload = {
+        "day": day, 
+        "tasks": [asdict(t) for t in tasks],
+        "notes": notes
+    }
     day_json_path(day).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def ensure_day(day: str) -> list[Task]:
+def ensure_day(day: str) -> tuple[list[Task], str]:
     ensure_template_exists()
     _ensure_dirs()
     p = day_json_path(day)
@@ -127,33 +149,34 @@ def ensure_day(day: str) -> list[Task]:
 
     tpl = template_path().read_text(encoding="utf-8")
     parsed = parse_markdown_tasks(tpl)
+    notes = extract_notes_content(tpl)
+    
     now = _now_iso()
     tasks: list[Task] = [
         Task(id=str(uuid4()), text=text, done=False, created_at=now, updated_at=now)
         for (_id, text, _done) in parsed
     ]
-    save_day(day, tasks)
-    return tasks
+    save_day(day, tasks, notes)
+    return tasks, notes
 
 
-def apply_markdown_edit(day: str, new_md: str) -> list[Task]:
+def apply_markdown_edit(day: str, new_md: str) -> tuple[list[Task], str]:
     """
     Apply edits from a markdown file into canonical JSON for the given day.
-    - Stable identity: if <!-- id:... --> is present, we keep that ID.
-    - If missing, we try to match by text (first match), otherwise create a new task.
-    - Any tasks not present in the edited markdown are deleted.
     """
-    existing = load_day(day)
-    by_id = {t.id: t for t in existing}
+    existing_tasks, _existing_notes = load_day(day)
+    by_id = {t.id: t for t in existing_tasks}
     used_existing_ids: set[str] = set()
 
     parsed = parse_markdown_tasks(new_md)
+    new_notes = extract_notes_content(new_md)
+    
     now = _now_iso()
     out: list[Task] = []
 
     # Simple text index for fallback matching (first available).
     by_text: dict[str, list[Task]] = {}
-    for t in existing:
+    for t in existing_tasks:
         by_text.setdefault(t.text.strip(), []).append(t)
 
     for maybe_id, text, done in parsed:
@@ -171,7 +194,7 @@ def apply_markdown_edit(day: str, new_md: str) -> list[Task]:
                 if cand.id not in used_existing_ids:
                     t = cand
                     break
-
+        
         if t is None:
             out.append(Task(id=str(uuid4()), text=text, done=done, created_at=now, updated_at=now))
         else:
@@ -186,12 +209,12 @@ def apply_markdown_edit(day: str, new_md: str) -> list[Task]:
                 )
             )
 
-    save_day(day, out)
-    return out
+    save_day(day, out, new_notes)
+    return out, new_notes
 
 
-def set_done(day: str, task_id: str, done: bool) -> list[Task]:
-    tasks = load_day(day)
+def set_done(day: str, task_id: str, done: bool) -> tuple[list[Task], str]:
+    tasks, notes = load_day(day)
     now = _now_iso()
     found = False
     out: list[Task] = []
@@ -203,27 +226,25 @@ def set_done(day: str, task_id: str, done: bool) -> list[Task]:
             out.append(t)
     if not found:
         raise TodoError("Task not found")
-    save_day(day, out)
-    return out
+    save_day(day, out, notes)
+    return out, notes
 
 
-def add_task(day: str, text: str) -> list[Task]:
+def add_task(day: str, text: str) -> tuple[list[Task], str]:
     text = text.strip()
     if not text:
         raise TodoError("Task text is empty")
-    tasks = load_day(day)
+    tasks, notes = load_day(day)
     now = _now_iso()
     tasks.append(Task(id=str(uuid4()), text=text, done=False, created_at=now, updated_at=now))
-    save_day(day, tasks)
-    return tasks
+    save_day(day, tasks, notes)
+    return tasks, notes
 
 
-def delete_task(day: str, task_id: str) -> list[Task]:
-    tasks = load_day(day)
+def delete_task(day: str, task_id: str) -> tuple[list[Task], str]:
+    tasks, notes = load_day(day)
     out = [t for t in tasks if t.id != task_id]
     if len(out) == len(tasks):
         raise TodoError("Task not found")
-    save_day(day, out)
-    return out
-
-
+    save_day(day, out, notes)
+    return out, notes

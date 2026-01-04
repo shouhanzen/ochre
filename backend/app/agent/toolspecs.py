@@ -9,6 +9,30 @@ def tool_specs() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "use_skill",
+                "description": "Activate a skill by name to add its instructions to your context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "forget_skill",
+                "description": "Deactivate a skill by name to remove its instructions from your context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "fs_list",
                 "description": "List files/directories under unified filesystem paths like /fs/mnt/<mountName>/... or /fs/todos/...",
                 "parameters": {
@@ -124,6 +148,5 @@ def tool_specs() -> list[dict[str, Any]]:
             },
         },
     ]
-
 
 

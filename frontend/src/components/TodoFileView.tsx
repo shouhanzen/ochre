@@ -14,7 +14,8 @@ function parseTodoItems(md: string): { lines: string[]; items: TodoItem[] } {
     const m = re.exec(lines[i] ?? '')
     if (!m) continue
     const checked = String(m[2] ?? '').toLowerCase() === 'x'
-    const text = String(m[4] ?? '')
+    let text = String(m[4] ?? '')
+    text = text.replace(/<!--\s*id:.*?-->/g, '').trim()
     items.push({ lineIdx: i, checked, text })
   }
   return { lines, items }
@@ -69,7 +70,7 @@ export function TodoFileView(props: {
   const empty = !props.content.trim()
 
   return (
-    <div className="todoFileView">
+    <div className="todoFileView" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="muted" style={{ marginBottom: 8 }}>
         {items.length} items {props.saving ? '· saving…' : null}
       </div>
@@ -95,9 +96,10 @@ export function TodoFileView(props: {
         {items.length === 0 ? <div className="muted">No checkbox items found. Add one below.</div> : null}
       </div>
 
-      <div className="row">
+      <div style={{ display: 'flex', gap: 8, padding: '10px 0' }}>
         <input
           className="input"
+          style={{ flex: 1, maxWidth: 'none' }}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Add a task…"
@@ -112,6 +114,9 @@ export function TodoFileView(props: {
     </div>
   )
 }
+
+
+
 
 
 

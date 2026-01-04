@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from app.agent.openrouter import chat_completions_stream
-from app.agent.prompt import ensure_system_prompt
+from app.agent.prompt import ensure_system_prompt_async
 from app.agent.tool_errors import ToolStructuredError
 from app.agent.tool_dispatch import dispatch_tool_call
 from app.agent.toolspecs import tool_specs
 
 @dataclass
 class StreamResult:
+
     assistant_text: str
     tool_calls: list[dict[str, Any]]
     finish_reason: Optional[str]
@@ -69,13 +70,7 @@ async def stream_once(
                     slot["function"]["arguments"] += fn["arguments"]
 
     ordered = [tool_calls[k] for k in sorted(tool_calls.keys())]
-    # Some providers/models may omit tool call ids in streaming deltas.
-    # OpenAI-compatible tool result messages require a non-empty id; synthesize one if missing.
-    if ordered:
-        base = f"ochre-tc-{int(time.time() * 1000)}"
-        for i, tc in enumerate(ordered):
-            if not tc.get("id"):
-                tc["id"] = f"{base}-{i}"
+
     return StreamResult(assistant_text="".join(buf), tool_calls=ordered, finish_reason=finish_reason)
 
 
@@ -86,6 +81,7 @@ async def run_tool_loop_streaming(
     on_event: Callable[[dict[str, Any]], Any],
     cancel_event: asyncio.Event,
     max_steps: int = 8,
+    session_id: Optional[str] = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """
     Streaming tool loop. Emits events via on_event:
@@ -94,7 +90,7 @@ async def run_tool_loop_streaming(
     - chat.usage
     Returns final assistant text and the full message list (including tool messages) for persistence.
     """
-    msgs = ensure_system_prompt(list(base_messages))
+    msgs = await ensure_system_prompt_async(list(base_messages), session_id=session_id)
     accumulated_final: list[str] = []
 
     for _ in range(max_steps):
@@ -109,7 +105,7 @@ async def run_tool_loop_streaming(
             cancel_event=cancel_event,
         )
 
-        # If cancelled mid-stream, stop immediately.
+
         if cancel_event.is_set():
             break
 
@@ -135,7 +131,8 @@ async def run_tool_loop_streaming(
                 t0 = time.time()
                 ok = True
                 try:
-                    tool_res = await dispatch_tool_call(name, args if isinstance(args, dict) else {"args": args})
+                    # Pass session_id to dispatch_tool_call
+                    tool_res = await dispatch_tool_call(name, args if isinstance(args, dict) else {"args": args}, session_id=session_id)
                     content = json.dumps({"ok": True, "result": tool_res}, ensure_ascii=False)
                 except ToolStructuredError as e:
                     ok = False
@@ -149,13 +146,9 @@ async def run_tool_loop_streaming(
                 on_event({"type": "tool.output", "payload": {"tool": name, "tcId": tc_id, "content": content}})
 
                 msgs.append({"role": "tool", "tool_call_id": tc_id, "name": name, "content": content})
+        
+        else:
+            # No tool calls -> we are done
+            return result.assistant_text, msgs
 
-            continue
-
-        # No tool calls: normal completion
-        msgs.append({"role": "assistant", "content": result.assistant_text})
-        break
-
-    return ("".join(accumulated_final), msgs)
-
-
+    return "".join(accumulated_final), msgs

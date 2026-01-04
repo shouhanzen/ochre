@@ -78,7 +78,11 @@ async function writeClipboardTextWithFallback(text: string): Promise<boolean> {
 
 function toChatMsgs(msgs: SessionMessage[]): ChatMsg[] {
   return msgs
-    .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'system' || m.role === 'tool')
+    .filter((m) => {
+      if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'system' && m.role !== 'tool') return false
+      if (m.role === 'assistant' && (!m.content || !m.content.trim())) return false
+      return true
+    })
     .map((m) => {
       const meta = (m.meta ?? {}) as any
       const rid = typeof meta.requestId === 'string' ? meta.requestId : undefined
@@ -588,15 +592,25 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
     <div className="panel">
       <div className="panelHeader">
         <div className="panelTitle">Chat</div>
-        {isMobile ? null : <div className="muted">Backend default model</div>}
         <div className="row">
           {props.onNewConversation ? (
-            <button className="button secondary" onClick={() => void props.onNewConversation?.()}>
-              New conversation
+            <button
+              className="button secondary"
+              title="New conversation"
+              onClick={() => void props.onNewConversation?.()}
+              style={{ padding: '6px 8px' }}
+            >
+              <span style={{ fontSize: '14px', lineHeight: 1 }}>＋</span>
             </button>
           ) : null}
-          <button className="button secondary" disabled={!props.sessionId || messages.length === 0} onClick={() => void onCopyConversation()}>
-            {copied ? 'Copied' : 'Copy conversation'}
+          <button
+            className="button secondary"
+            disabled={!props.sessionId || messages.length === 0}
+            onClick={() => void onCopyConversation()}
+            title={copied ? 'Copied' : 'Copy conversation'}
+            style={{ padding: '6px 8px' }}
+          >
+            <span style={{ fontSize: '14px', lineHeight: 1 }}>{copied ? '✓' : '⎘'}</span>
           </button>
         </div>
       </div>
@@ -604,7 +618,7 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
       <div className="chatLog">
         {!props.sessionId ? <div className="muted">Initializing session…</div> : null}
         {messages.length === 0 ? (
-          <div className="muted">Ask the agent to view/edit `/fs/todos/today.md` or `/fs/mnt/workspace/...`.</div>
+          <div className="muted">Ask the agent to view/edit `/fs/todos/today.todo.md` or `/fs/mnt/workspace/...`.</div>
         ) : null}
         {messages.length > 0 && renderedItems.length < allRenderItems.length ? (
             <div className="muted" style={{ marginBottom: 10, textAlign: 'center' }}>

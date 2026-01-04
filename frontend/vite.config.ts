@@ -18,8 +18,9 @@ export default defineConfig({
         start_url: '/',
         scope: '/',
         display: 'standalone',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
+        display_override: ['window-controls-overlay'],
+        theme_color: '#3c3c3c',
+        background_color: '#1e1e1e',
         icons: [
           {
             src: '/ochre-icon.svg',

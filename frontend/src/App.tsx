@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+  import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChatPanel } from './components/ChatPanel'
 import { ActivityBar } from './components/ActivityBar'
 import { Editor } from './components/Editor'
+import { EditorTabs } from './components/EditorTabs'
 import { FileTree } from './components/FileTree'
 import { SessionList } from './components/SessionList'
 import { PendingPanel } from './components/PendingPanel'
@@ -46,13 +47,9 @@ function useViewportHeightVar(varName = '--ochre-vh') {
     const vv = window.visualViewport
     const set = () => {
       const h = vv?.height ?? window.innerHeight
-      const w = vv?.width ?? window.innerWidth
       const top = vv?.offsetTop ?? 0
-      const left = vv?.offsetLeft ?? 0
       document.documentElement.style.setProperty(varName, `${Math.round(h)}px`)
-      document.documentElement.style.setProperty('--ochre-vw', `${Math.round(w)}px`)
       document.documentElement.style.setProperty('--ochre-vv-top', `${Math.round(top)}px`)
-      document.documentElement.style.setProperty('--ochre-vv-left', `${Math.round(left)}px`)
     }
 
     set()
@@ -151,12 +148,24 @@ function useKeyboardOpen(enabled: boolean) {
 
 export default function App() {
   const PATH_STORAGE_KEY = 'ochre.selectedPath'
+  const OPEN_FILES_KEY = 'ochre.openFiles'
   const SESSION_STORAGE_KEY = 'ochre.selectedSessionId'
+  
+  const [openFiles, setOpenFiles] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(OPEN_FILES_KEY)
+      if (raw) return JSON.parse(raw)
+      return []
+    } catch {
+      return []
+    }
+  })
+
   const [selectedPath, setSelectedPath] = useState<string | undefined>(() => {
     try {
-      return localStorage.getItem(PATH_STORAGE_KEY) || '/fs/todos/today.md'
+      return localStorage.getItem(PATH_STORAGE_KEY) || '/fs/todos/today.todo.md'
     } catch {
-      return '/fs/todos/today.md'
+      return '/fs/todos/today.todo.md'
     }
   })
   const [sessionId, setSessionId] = useState<string | undefined>(() => {
@@ -170,7 +179,11 @@ export default function App() {
   const [sessionInitError, setSessionInitError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [debugOpen, setDebugOpen] = useState(false)
-  const [activeRail, setActiveRail] = useState<'explorer' | 'sessions' | 'chat' | 'kanban' | 'settings'>('explorer')
+  const [activeRail, setActiveRail] = useState<'explorer' | 'sessions' | 'chat' | 'pending' | 'settings'>('explorer')
+  const [ephemeralFile, setEphemeralFile] = useState<string | null>(null)
+  const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(new Set())
+  const [fileViewModes, setFileViewModes] = useState<Record<string, 'source' | 'preview'>>({})
+  const editorActions = useRef<{ save: () => void; saving: boolean } | null>(null)
 
   useViewportHeightVar()
   const isMobile = useIsMobile(900)
@@ -178,6 +191,14 @@ export default function App() {
   const keyboardOpen = useKeyboardOpen(isMobile)
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
   const [browseMode, setBrowseMode] = useState<BrowseMode>('files')
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(OPEN_FILES_KEY, JSON.stringify(openFiles))
+    } catch {
+      // ignore
+    }
+  }, [openFiles])
 
   useEffect(() => {
     try {
@@ -198,20 +219,22 @@ export default function App() {
 
   useEffect(() => {
     if (sessionId) return
-    ;(async () => {
-      setSessionInitError(null)
-      console.info('[Ochre] creating session…')
-      try {
-        const res = await createSession({ title: null })
-        console.info('[Ochre] session created', { id: res.session.id })
-        setSessionId(res.session.id)
-      } catch (e: any) {
-        const msg = e?.message ?? String(e)
-        console.error('[Ochre] failed to create session', msg)
-        setSessionInitError(msg)
-      }
-    })()
+    void newConversation()
   }, [sessionId])
+
+  async function newConversation() {
+    setSessionInitError(null)
+    console.info('[Ochre] creating session…')
+    try {
+      const res = await createSession({ title: null })
+      console.info('[Ochre] session created', { id: res.session.id })
+      setSessionId(res.session.id)
+    } catch (e: any) {
+      const msg = e?.message ?? String(e)
+      console.error('[Ochre] failed to create session', msg)
+      setSessionInitError(msg)
+    }
+  }
 
   useEffect(() => {
     try {
@@ -267,7 +290,11 @@ export default function App() {
                 <FileTree
                   selectedPath={selectedPath}
                   onSelectFile={(p) => {
-                    setSelectedPath(p)
+                    handleSelectFile(p)
+                    setMobileTab('editor')
+                  }}
+                  onOpenFile={(p) => {
+                    handleOpenFile(p)
                     setMobileTab('editor')
                   }}
                 />
@@ -284,13 +311,29 @@ export default function App() {
           ) : null}
 
           {mobileTab === 'editor' ? (
-            <Editor
-              path={selectedPath}
-              onNavigate={(p) => setSelectedPath(p)}
-            />
+            <div className="editorRegion">
+              <EditorTabs
+                files={displayedFiles}
+                activeFile={selectedPath}
+                ephemeralFile={ephemeralFile}
+                dirtyFiles={dirtyFiles}
+                viewMode={currentViewMode}
+                onSelect={setSelectedPath}
+                onClose={handleCloseFile}
+                onToggleViewMode={handleToggleViewMode}
+              />
+              <Editor
+                path={selectedPath}
+                viewMode={currentViewMode}
+                onNavigate={handleSelectFile}
+                onChange={handleContentChange}
+                onSaved={handleSaved}
+                onMountActions={(a) => (editorActions.current = a)}
+              />
+            </div>
           ) : null}
 
-          {mobileTab === 'chat' ? <ChatPanel sessionId={sessionId} variant="mobile" /> : null}
+          {mobileTab === 'chat' ? <ChatPanel sessionId={sessionId} variant="mobile" onNewConversation={newConversation} /> : null}
           {mobileTab === 'pending' ? <PendingPanel sessionId={sessionId} /> : null}
         </div>
 
@@ -313,11 +356,123 @@ export default function App() {
     )
   }
 
+  function handleSelectFile(path: string) {
+    if (openFiles.includes(path)) {
+      setSelectedPath(path)
+    } else {
+      setEphemeralFile(path)
+      setSelectedPath(path)
+    }
+  }
+
+  function handleOpenFile(path: string) {
+    if (!openFiles.includes(path)) {
+      setOpenFiles((prev) => [path, ...prev])
+    }
+    setEphemeralFile(null)
+    setSelectedPath(path)
+  }
+
+  function handleCloseFile(path: string) {
+    if (dirtyFiles.has(path)) {
+      if (!confirm('Unsaved changes. Close anyway?')) return
+      setDirtyFiles((prev) => {
+        const next = new Set(prev)
+        next.delete(path)
+        return next
+      })
+    }
+
+    const idx = openFiles.indexOf(path)
+    if (idx !== -1) {
+      const nextOpen = openFiles.filter((p) => p !== path)
+      setOpenFiles(nextOpen)
+      if (selectedPath === path) {
+        if (nextOpen.length === 0) {
+          setSelectedPath(ephemeralFile ?? undefined)
+        } else {
+          const nextIdx = Math.max(0, idx - 1)
+          setSelectedPath(nextOpen[nextIdx] ?? nextOpen[0])
+        }
+      }
+    } else if (path === ephemeralFile) {
+      setEphemeralFile(null)
+      if (selectedPath === path) {
+        if (openFiles.length > 0) setSelectedPath(openFiles[openFiles.length - 1])
+        else setSelectedPath(undefined)
+      }
+    }
+  }
+
+  function handleContentChange(path: string) {
+    setDirtyFiles((prev) => {
+      const next = new Set(prev)
+      next.add(path)
+      return next
+    })
+    if (ephemeralFile === path) {
+      if (!openFiles.includes(path)) {
+        setOpenFiles((prev) => [path, ...prev])
+      }
+      setEphemeralFile(null)
+    }
+  }
+
+  function handleSaved(path: string) {
+    setDirtyFiles((prev) => {
+      const next = new Set(prev)
+      next.delete(path)
+      return next
+    })
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        editorActions.current?.save()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  function handleToggleViewMode(path: string) {
+    setFileViewModes((prev) => {
+      const current = prev[path] ?? (path.endsWith('.todo.md') || path.endsWith('.task.md') ? 'preview' : 'source')
+      return { ...prev, [path]: current === 'preview' ? 'source' : 'preview' }
+    })
+  }
+
+  const currentViewMode = useMemo(() => {
+    if (!selectedPath) return 'source'
+    return (
+      fileViewModes[selectedPath] ??
+      (selectedPath.endsWith('.todo.md') || selectedPath.endsWith('.task.md') ? 'preview' : 'source')
+    )
+  }, [selectedPath, fileViewModes])
+
+  const displayedFiles = useMemo(() => {
+    if (ephemeralFile && !openFiles.includes(ephemeralFile)) {
+      return [ephemeralFile, ...openFiles]
+    }
+    return openFiles
+  }, [openFiles, ephemeralFile])
+
   return (
     <div className="vscodeShell">
       <div className="topBar">
         <div className="brand">Ochre</div>
-        <div className="muted">VS Code-style</div>
+        <div className="row">
+          <button
+            className="button secondary"
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+            style={{ padding: '4px 8px', border: 0, background: 'transparent' }}
+          >
+            <span style={{ fontSize: '16px', lineHeight: 1 }}>⚙</span>
+          </button>
+        </div>
       </div>
 
       <div className="vscodeMain">
@@ -332,21 +487,36 @@ export default function App() {
         <div className="sideBar">
           {activeRail === 'sessions' ? (
             <SessionList activeSessionId={sessionId} onSelect={(id) => setSessionId(id)} />
+          ) : activeRail === 'pending' ? (
+            <PendingPanel sessionId={sessionId} />
           ) : (
-            <FileTree selectedPath={selectedPath} onSelectFile={(p) => setSelectedPath(p)} />
+            <FileTree selectedPath={selectedPath} onSelectFile={handleSelectFile} onOpenFile={handleOpenFile} />
           )}
         </div>
 
         <div className="editorRegion">
+          <EditorTabs
+            files={displayedFiles}
+            activeFile={selectedPath}
+            ephemeralFile={ephemeralFile}
+            dirtyFiles={dirtyFiles}
+            viewMode={currentViewMode}
+            onSelect={setSelectedPath}
+            onClose={handleCloseFile}
+            onToggleViewMode={handleToggleViewMode}
+          />
           <Editor
             path={selectedPath}
-            onNavigate={(p) => setSelectedPath(p)}
+            viewMode={currentViewMode}
+            onNavigate={handleSelectFile}
+            onChange={handleContentChange}
+            onSaved={handleSaved}
+            onMountActions={(a) => (editorActions.current = a)}
           />
         </div>
 
         <div className="rightPanel">
-          <ChatPanel sessionId={sessionId} />
-          <PendingPanel sessionId={sessionId} />
+          <ChatPanel sessionId={sessionId} onNewConversation={newConversation} />
         </div>
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} onOpenDebug={() => setDebugOpen(true)} />

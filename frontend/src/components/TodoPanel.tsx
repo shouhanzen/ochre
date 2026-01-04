@@ -4,6 +4,7 @@ import { addTodayTodo, getTodayTodos, setTodayTodoDone, type Task } from '../api
 export function TodoPanel(props: { refreshKey?: number }) {
   const [day, setDay] = useState<string>('')
   const [tasks, setTasks] = useState<Task[]>([])
+  const [notes, setNotes] = useState<string>('')
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -17,6 +18,7 @@ export function TodoPanel(props: { refreshKey?: number }) {
       const res = await getTodayTodos()
       setDay(res.day)
       setTasks(res.tasks)
+      setNotes(res.notes || '')
     } catch (e: any) {
       setError(e?.message ?? String(e))
     } finally {
@@ -33,6 +35,7 @@ export function TodoPanel(props: { refreshKey?: number }) {
     try {
       const res = await setTodayTodoDone(t.id, !t.done)
       setTasks(res.tasks)
+      setNotes(res.notes || '')
     } catch (e: any) {
       setError(e?.message ?? String(e))
     }
@@ -45,6 +48,7 @@ export function TodoPanel(props: { refreshKey?: number }) {
     try {
       const res = await addTodayTodo(text)
       setTasks(res.tasks)
+      setNotes(res.notes || '')
     } catch (e: any) {
       setError(e?.message ?? String(e))
     }
@@ -90,9 +94,15 @@ export function TodoPanel(props: { refreshKey?: number }) {
           Add
         </button>
       </div>
+      
+      {notes ? (
+        <div style={{ marginTop: 20, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+          <div className="muted" style={{ marginBottom: 8, fontSize: '0.85em', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Notes</div>
+          <div style={{ whiteSpace: 'pre-wrap', fontSize: '0.9em', lineHeight: '1.5', color: 'var(--fg-secondary)' }}>
+            {notes}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
-
-
-

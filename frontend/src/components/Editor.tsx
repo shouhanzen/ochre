@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { fsList, fsMove, fsRead, fsWrite } from '../api'
 import { TodoFileView } from './TodoFileView'
 
@@ -78,7 +80,14 @@ function renderTaskDoc(d: TaskDoc): string {
 
 type StatusOpt = { name: string; path: string }
 
-export function Editor(props: { path?: string; onSaved?: (path: string) => void; onNavigate?: (path: string) => void }) {
+export function Editor(props: {
+  path?: string
+  viewMode?: 'source' | 'preview'
+  onSaved?: (path: string) => void
+  onChange?: (path: string) => void
+  onNavigate?: (path: string) => void
+  onMountActions?: (actions: { save: () => void; saving: boolean }) => void
+}) {
   const [content, setContent] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -87,28 +96,27 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
   const [task, setTask] = useState<TaskDoc | null>(null)
   const [taskError, setTaskError] = useState<string | null>(null)
   const [statusOpts, setStatusOpts] = useState<StatusOpt[]>([])
-  const [todoView, setTodoView] = useState<'clicky' | 'text'>('clicky')
 
   const title = useMemo(() => props.path ?? 'No file selected', [props.path])
   const isTodo = !!props.path && props.path.endsWith('.todo.md')
   const isTask = !!props.path && props.path.endsWith('.task.md')
+  const isGenericMarkdown = !!props.path && props.path.endsWith('.md') && !isTodo && !isTask
+
+  // Default to what the parent says, but for internal TodoFileView logic we might need sync.
+  // Actually, TodoFileView handles its own rendering if we pass it the content.
+  // The 'todoView' state in here was for clicky vs text.
+  // Now 'viewMode' from props controls source vs preview (clicky).
 
   useEffect(() => {
     const path = props.path
-    if (!path || !path.endsWith('.todo.md')) return
-    const k = `ochre.todoView.${path}`
-    try {
-      const v = localStorage.getItem(k)
-      if (v === 'text' || v === 'clicky') setTodoView(v)
-      else setTodoView('clicky')
-    } catch {
-      setTodoView('clicky')
+    if (!path) {
+      // Clear state when no file is selected
+      setContent('')
+      setTask(null)
+      setLoading(false)
+      setError(null)
+      return
     }
-  }, [props.path])
-
-  useEffect(() => {
-    const path = props.path
-    if (!path) return
     setLoading(true)
     setError(null)
     setTask(null)
@@ -155,10 +163,14 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
     })()
   }, [props.path, task?.boardId])
 
+  useEffect(() => {
+    props.onMountActions?.({ save: () => void save(), saving })
+  }, [save, saving, props.onMountActions])
+
   async function save() {
     const path = props.path
     if (!path) return
-    if (path.endsWith('.todo.md') && todoView === 'clicky') return
+    if (path.endsWith('.todo.md') && props.viewMode === 'preview') return
     setSaving(true)
     setError(null)
     try {
@@ -228,61 +240,26 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
   }
 
   return (
-    <div className="panel">
-      <div className="panelHeader">
-        <div className="panelTitle">Editor</div>
-        <div className="muted">{title}</div>
-        <div className="row">
-          {isTodo ? (
-            <>
-              <button
-                className={todoView === 'clicky' ? 'button' : 'button secondary'}
-                onClick={() => {
-                  const path = props.path
-                  if (!path) return
-                  setTodoView('clicky')
-                  try {
-                    localStorage.setItem(`ochre.todoView.${path}`, 'clicky')
-                  } catch {
-                    // ignore
-                  }
-                }}
-              >
-                Clicky
-              </button>
-              <button
-                className={todoView === 'text' ? 'button' : 'button secondary'}
-                onClick={() => {
-                  const path = props.path
-                  if (!path) return
-                  setTodoView('text')
-                  try {
-                    localStorage.setItem(`ochre.todoView.${path}`, 'text')
-                  } catch {
-                    // ignore
-                  }
-                }}
-              >
-                Text
-              </button>
-            </>
-          ) : null}
-          <button
-            className="button"
-            onClick={() => void save()}
-            disabled={!props.path || saving || (isTodo && todoView === 'clicky')}
-            title={isTodo && todoView === 'clicky' ? 'Clicky todo view saves automatically.' : undefined}
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-        </div>
-      </div>
-
+    <div className="panel" style={{ borderTop: 0 }}>
       {error ? <div className="error">{error}</div> : null}
 
       <div className="editor">
-        {loading ? <div className="muted">Loading…</div> : null}
-        {isTodo && todoView === 'clicky' && props.path ? (
+        {!props.path ? (
+          <div
+            style={{
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--vscode-foreground-muted)',
+              fontSize: '13px',
+            }}
+          >
+            No file open
+          </div>
+        ) : loading ? (
+          <div className="muted">Loading…</div>
+        ) : isTodo && props.viewMode === 'preview' && props.path ? (
           <TodoFileView
             path={props.path}
             content={content}
@@ -290,7 +267,7 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
             onWrite={saveTodo}
             onInitEmpty={initTodoEmpty}
           />
-        ) : isTask && task ? (
+        ) : isTask && props.viewMode === 'preview' && task ? (
           <div className="taskCard">
             {taskError ? <div className="error">{taskError}</div> : null}
             <div className="taskCardGrid">
@@ -299,7 +276,10 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
                 <input
                   className="input"
                   value={task.title}
-                  onChange={(e) => setTask((p) => (p ? { ...p, title: e.target.value } : p))}
+                  onChange={(e) => {
+                    setTask((p) => (p ? { ...p, title: e.target.value } : p))
+                    if (props.path) props.onChange?.(props.path)
+                  }}
                 />
               </label>
               <label className="label">
@@ -321,7 +301,10 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
                   <input
                     className="input"
                     value={task.status}
-                    onChange={(e) => setTask((p) => (p ? { ...p, status: e.target.value } : p))}
+                    onChange={(e) => {
+                      setTask((p) => (p ? { ...p, status: e.target.value } : p))
+                      if (props.path) props.onChange?.(props.path)
+                    }}
                   />
                 )}
               </label>
@@ -330,7 +313,7 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
                 <input
                   className="input"
                   value={task.tags.join(', ')}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setTask((p) =>
                       p
                         ? {
@@ -342,7 +325,8 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
                           }
                         : p,
                     )
-                  }
+                    if (props.path) props.onChange?.(props.path)
+                  }}
                 />
               </label>
             </div>
@@ -351,17 +335,29 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
               <textarea
                 className="textarea editorArea"
                 value={task.body}
-                onChange={(e) => setTask((p) => (p ? { ...p, body: e.target.value } : p))}
+                onChange={(e) => {
+                  setTask((p) => (p ? { ...p, body: e.target.value } : p))
+                  if (props.path) props.onChange?.(props.path)
+                }}
                 spellCheck={false}
                 disabled={!props.path}
               />
+            </div>
+          </div>
+        ) : isGenericMarkdown && props.viewMode === 'preview' ? (
+          <div className="editorArea" style={{ padding: '10px 20px', overflow: 'auto', background: '#1e1e1e' }}>
+            <div className="chatContent md">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
             </div>
           </div>
         ) : (
           <textarea
             className="textarea editorArea"
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={(e) => {
+              setContent(e.target.value)
+              if (props.path) props.onChange?.(props.path)
+            }}
             spellCheck={false}
             disabled={!props.path}
           />
@@ -370,6 +366,3 @@ export function Editor(props: { path?: string; onSaved?: (path: string) => void;
     </div>
   )
 }
-
-
-

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
-
 import hashlib
 import json
 import re
 import unicodedata
+from typing import Any, Iterable
 from urllib.parse import quote, unquote
 
+from app.fs.skills import Skill, SkillsMixin
 from app.notion.cache import (
     DEFAULT_BOARD_ID,
     get_card,
@@ -90,11 +90,128 @@ def _resolve_card_id(*, board_id: str, filename: str) -> str:
     raise RuntimeError("Unsupported card filename")
 
 
-class KanbanNotionProvider:
+def _safe_json_loads(s: str, default):
+    try:
+        return json.loads(s)
+    except Exception:
+        return default
+
+def _truncate_lines(lines: list[str], *, max_lines: int) -> list[str]:
+    if max_lines <= 0:
+        return []
+    if len(lines) <= max_lines:
+        return lines
+    return [*lines[: max_lines - 1], f"... ({len(lines) - (max_lines - 1)} more lines omitted)"]
+
+
+class KanbanNotionProvider(SkillsMixin):
     def can_handle(self, path: str) -> bool:
         return path == "/fs/kanban/notion" or path.startswith("/fs/kanban/notion/")
 
+    def get_skills(self) -> Iterable[Skill]:
+        return [
+            Skill(
+                name="manage_kanban",
+                description="Manage Notion Kanban boards. Use when user asks to list boards, check status, or move cards.",
+                content="""---
+name: manage_kanban
+description: Manage Notion Kanban boards.
+---
+
+# Manage Kanban
+
+Interact with Notion boards via `/fs/kanban/notion/`.
+
+## Structure
+- `/fs/kanban/notion/boards/<boardId>/`
+- `/fs/kanban/notion/boards/<boardId>/status/<statusName>/`
+- `/fs/kanban/notion/boards/<boardId>/status/<statusName>/<cardId>.task.md`
+
+## Instructions
+1. **List Boards**: `fs_list("/fs/kanban/notion/boards")`
+2. **Explore Statuses**: `fs_list("/fs/kanban/notion/boards/<id>/status")`
+3. **Move Card**: Use `fs_move(fromPath, toPath)` to change status.
+   - Moves are staged as "overlays" until approved.
+4. **Edit Card**: Use `fs_write` to edit the markdown content (title, body).
+""",
+            )
+        ]
+
+    def get_context_description(self) -> str | None:
+        boards = list_boards()
+        board_ids = [str(b.get("id")) for b in boards if b.get("id")]
+        if not board_ids:
+            board_ids = [DEFAULT_BOARD_ID]
+
+        out_lines: list[str] = []
+        for board_id in board_ids[:3]:
+            cards = list_cards(board_id)
+            if not cards:
+                out_lines.append(f"Notion Board: {board_id} (no cached cards)")
+                out_lines.append("")
+                continue
+
+            # Effective (overlay-first) title/status/tags.
+            eff: list[dict[str, object]] = []
+            for c in cards:
+                cid = str(c.get("id") or "")
+                if not cid:
+                    continue
+                title = str(c.get("title") or "")
+                status = str(c.get("status") or "Uncategorized")
+                tags = _safe_json_loads(str(c.get("tags_json") or "[]"), [])
+                if not isinstance(tags, list):
+                    tags = []
+
+                ov = get_overlay(cid)
+                if ov and ov.get("content_md"):
+                    try:
+                        doc = parse_card_doc(str(ov["content_md"]))
+                        if doc.title:
+                            title = doc.title
+                        if doc.status:
+                            status = doc.status
+                        if doc.tags:
+                            tags = list(doc.tags)
+                    except Exception:
+                        pass
+
+                eff.append({"id": cid, "title": title, "status": status, "tags": tags})
+
+            # Top-of-mind heuristic
+            active_status_terms = ("doing", "in progress", "today", "now", "next", "urgent", "focus")
+            active_tag_terms = ("urgent", "top", "focus", "now", "today", "next")
+
+            def is_top(item: dict[str, object]) -> bool:
+                st = str(item.get("status") or "").lower()
+                if any(t in st for t in active_status_terms):
+                    return True
+                tags = item.get("tags") or []
+                if isinstance(tags, list):
+                    joined = " ".join([str(x).lower() for x in tags])
+                    if any(t in joined for t in active_tag_terms):
+                        return True
+                return False
+
+            top = [x for x in eff if is_top(x)]
+            top.sort(key=lambda x: (str(x.get("status") or "").lower(), str(x.get("title") or "").lower()))
+
+            out_lines.append(f"Notion Board: {board_id}")
+            if top:
+                out_lines.append("Top of mind:")
+                for x in top[:12]:
+                    out_lines.append(f"- {x.get('title')} (id:{x.get('id')}) [{x.get('status')}]")
+            else:
+                out_lines.append("Top of mind: (none matched heuristics)")
+            out_lines.append("")
+
+        return "\n".join(_truncate_lines(out_lines, max_lines=50)).rstrip()
+
     def list(self, path: str) -> dict[str, Any]:
+        skills_res = self._handle_skills_list(path, self.get_skills())
+        if skills_res:
+            return skills_res
+
         if path.rstrip("/") == "/fs/kanban/notion":
             return {
                 "path": path,
@@ -189,6 +306,10 @@ class KanbanNotionProvider:
         raise RuntimeError("Unknown Notion kanban directory")
 
     def read(self, path: str, *, max_bytes: int = 512_000) -> dict[str, Any]:
+        skills_res = self._handle_skills_read(path, self.get_skills())
+        if skills_res:
+            return skills_res
+        
         _ = max_bytes
         if path == "/fs/kanban/notion/boards/default/board.json":
             # best-effort refresh (if configured) and return board list snapshot
@@ -322,5 +443,3 @@ class KanbanNotionProvider:
 
         upsert_overlay(board_id=from_board, card_id=card_id, content_md=new_md)
         return {"fromPath": from_path, "toPath": to_path, "ok": True, "changed": True}
-
-

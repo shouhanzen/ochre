@@ -5,15 +5,17 @@ import time
 from typing import Any, Optional
 
 from app.agent.openrouter import chat_completions
-from app.agent.prompt import ensure_system_prompt
+from app.agent.prompt import ensure_system_prompt_async
 from app.agent.tool_errors import ToolStructuredError
 from app.agent.tool_dispatch import dispatch_tool_call
 from app.agent.toolspecs import tool_specs
 
 
-def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # This now needs to be async or awaited
+    processed = await ensure_system_prompt_async(messages)
     out: list[dict[str, Any]] = []
-    for m in ensure_system_prompt(messages):
+    for m in processed:
         role = m.get("role")
         if role not in ("user", "assistant", "tool", "system"):
             continue
@@ -31,7 +33,7 @@ async def run_agent(
     Runs a tool-calling loop until the model returns a message without tool calls.
     Returns the final OpenRouter response JSON, with internal steps applied to messages.
     """
-    msgs = _normalize_messages(messages)
+    msgs = await _normalize_messages(messages)
     tools = tool_specs()
 
     last_resp: Optional[dict[str, Any]] = None
@@ -84,6 +86,3 @@ async def run_agent(
     # Attach the final message list for callers that want it.
     last_resp["_ochre_messages"] = msgs
     return last_resp
-
-
-

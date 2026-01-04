@@ -7,6 +7,7 @@ from app.fs.providers.kanban_root import KanbanRootProvider
 from app.fs.providers.mnt import MntProvider
 from app.fs.providers.email_gmail import EmailGmailProvider
 from app.fs.providers.root import RootProvider
+from app.fs.providers.shortcuts import ShortcutsProvider
 from app.fs.providers.todos import TodosProvider
 from app.logging.ndjson import log_event
 
@@ -17,6 +18,7 @@ class FsError(RuntimeError):
 
 _providers = [
     RootProvider(),
+    ShortcutsProvider(),
     KanbanRootProvider(),
     MntProvider(),
     TodosProvider(),
@@ -152,3 +154,65 @@ def fs_move(from_path: str | list[str], to_path: str | list[str]) -> dict[str, A
     except Exception:
         pass
     return res
+
+
+def fs_grep(
+    dir: str,
+    query: str,
+    regex: bool = False,
+    case_sensitive: bool = False,
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
+    max_files: int = 100,
+    max_matches: int = 100,
+    max_file_bytes: int = 512_000,
+    context_before: int = 0,
+    context_after: int = 0,
+) -> dict[str, Any]:
+    # Currently only supported by MntProvider and potentially others if they implement `grep`.
+    # We delegate to the provider.
+    p = _provider_for(dir)
+    if not hasattr(p, "grep"):
+        raise FsError(f"Grep not supported for this provider ({type(p).__name__})")
+    
+    return getattr(p, "grep")(
+        dir,
+        query=query,
+        regex=regex,
+        case_sensitive=case_sensitive,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        max_files=max_files,
+        max_matches=max_matches,
+        max_file_bytes=max_file_bytes,
+        context_before=context_before,
+        context_after=context_after
+    )
+
+
+def fs_patch(
+    path: str,
+    edits: list[dict[str, Any]],
+    max_file_bytes: int = 2_000_000,
+    max_total_delta_bytes: int = 500_000,
+    diff_cap_bytes: int = 20_000
+) -> dict[str, Any]:
+    p = _provider_for(path)
+    # Check if provider has patch support (often delegated to vfs_patch utility, 
+    # but the provider must expose it or we can try a default implementation via read/write).
+    
+    # Ideally providers implement 'patch'.
+    if hasattr(p, "patch"):
+        return getattr(p, "patch")(
+            path, 
+            edits=edits, 
+            max_file_bytes=max_file_bytes, 
+            max_total_delta_bytes=max_total_delta_bytes, 
+            diff_cap_bytes=diff_cap_bytes
+        )
+        
+    # Fallback: Read-Modify-Write if not natively supported? 
+    # Actually, fs_patch is complex (fuzzy matching), so we probably want a shared utility 
+    # that providers call. But for now, let's assume if the provider doesn't support it, we fail.
+    # MntProvider should support it.
+    raise FsError(f"Patch not supported for this provider ({type(p).__name__})")

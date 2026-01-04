@@ -15,6 +15,12 @@ export type Task = {
   updated_at: string
 }
 
+export type TodoResponse = {
+  day: string
+  tasks: Task[]
+  notes?: string
+}
+
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -32,6 +38,10 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function fsList(path: string): Promise<{ entries: FileEntry[] }> {
   return await jsonFetch(`/api/fs/list?path=${encodeURIComponent(path)}`)
+}
+
+export async function fsTree(path: string): Promise<{ tree: string }> {
+  return await jsonFetch(`/api/fs/tree?path=${encodeURIComponent(path)}`)
 }
 
 export async function fsRead(path: string): Promise<{ content: string }> {
@@ -52,23 +62,20 @@ export async function fsMove(fromPath: string, toPath: string): Promise<void> {
   })
 }
 
-export async function getTodayTodos(): Promise<{ day: string; tasks: Task[] }> {
+export async function getTodayTodos(): Promise<TodoResponse> {
   return await jsonFetch(`/api/todos/today`)
 }
 
-export async function addTodayTodo(text: string): Promise<{ day: string; tasks: Task[] }> {
+export async function addTodayTodo(text: string): Promise<TodoResponse> {
   return await jsonFetch(`/api/todos/today/add`, {
     method: 'POST',
     body: JSON.stringify({ text }),
   })
 }
 
-export async function setTodayTodoDone(id: string, done: boolean): Promise<{ day: string; tasks: Task[] }> {
+export async function setTodayTodoDone(id: string, done: boolean): Promise<TodoResponse> {
   return await jsonFetch(`/api/todos/today/set_done`, {
     method: 'PATCH',
     body: JSON.stringify({ id, done }),
   })
 }
-
-
-

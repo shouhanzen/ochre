@@ -25,16 +25,16 @@ class DeleteBody(BaseModel):
 @router.get("/api/todos/today")
 def get_today() -> dict:
     day = today_str()
-    tasks = load_day(day)
-    return {"day": day, "tasks": [t.__dict__ for t in tasks]}
+    tasks, notes = load_day(day)
+    return {"day": day, "tasks": [t.__dict__ for t in tasks], "notes": notes}
 
 
 @router.post("/api/todos/today/add")
 def post_add(body: AddBody) -> dict:
     day = today_str()
     try:
-        tasks = add_task(day, body.text)
-        return {"day": day, "tasks": [t.__dict__ for t in tasks]}
+        tasks, notes = add_task(day, body.text)
+        return {"day": day, "tasks": [t.__dict__ for t in tasks], "notes": notes}
     except TodoError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -43,8 +43,8 @@ def post_add(body: AddBody) -> dict:
 def patch_set_done(body: SetDoneBody) -> dict:
     day = today_str()
     try:
-        tasks = set_done(day, body.id, body.done)
-        return {"day": day, "tasks": [t.__dict__ for t in tasks]}
+        tasks, notes = set_done(day, body.id, body.done)
+        return {"day": day, "tasks": [t.__dict__ for t in tasks], "notes": notes}
     except TodoError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -53,10 +53,7 @@ def patch_set_done(body: SetDoneBody) -> dict:
 def delete_today(body: DeleteBody) -> dict:
     day = today_str()
     try:
-        tasks = delete_task(day, body.id)
-        return {"day": day, "tasks": [t.__dict__ for t in tasks]}
+        tasks, notes = delete_task(day, body.id)
+        return {"day": day, "tasks": [t.__dict__ for t in tasks], "notes": notes}
     except TodoError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-
-
-

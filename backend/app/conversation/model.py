@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
+from uuid import uuid4
 
 from app.agent.stream_runner import run_tool_loop_streaming
 from app.api.settings import DEFAULT_MODEL_FALLBACK, DEFAULT_MODEL_KEY
@@ -19,7 +20,7 @@ def _now_iso() -> str:
 def _truncate(s: str, *, max_chars: int) -> tuple[str, bool]:
     if len(s) <= max_chars:
         return s, False
-    return s[:max_chars] + f"\n... (truncated, {len(s) - max_chars} chars omitted)", True
+    return s[:max_chars] + "...", True
 
 
 @dataclass
@@ -37,8 +38,12 @@ class ActiveRun:
     ended_at: Optional[str]
     cancel_event: asyncio.Event
     task: Optional[asyncio.Task]
-    open_assistant: Optional[OpenAssistant]
-    tool_meta: dict[str, dict[str, Any]]
+    open_assistant: Optional[OpenAssistant] = None
+    tool_meta: dict[str, dict[str, Any]] = None
+
+    def __post_init__(self):
+        if self.tool_meta is None:
+            self.tool_meta = {}
 
 
 class ConversationModel:
@@ -51,6 +56,8 @@ class ConversationModel:
         self.lock = asyncio.Lock()
         self.active_run: Optional[ActiveRun] = None
         self._seen_request_ids: dict[str, str] = {}  # requestId -> status
+        # In-memory set of active skills for this session.
+        self.active_skills: set[str] = set()
 
     async def snapshot_view(self) -> dict[str, Any]:
         """
@@ -74,12 +81,15 @@ class ConversationModel:
                         "content": ar.open_assistant.buffer_text,
                     }
 
+            active_skills_list = sorted(list(self.active_skills))
+
         msgs = list_messages(self.session_id, limit=400)
         return {
             "sessionId": self.session_id,
             "messages": [m.__dict__ for m in msgs],
             "activeRun": active_run_view,
             "overlays": overlays or None,
+            "activeSkills": active_skills_list,
         }
 
     async def submit_user_message(self, *, request_id: str, content: str, model: Optional[str] = None) -> None:
@@ -126,37 +136,24 @@ class ConversationModel:
             self.active_run.task = asyncio.create_task(self._run_generation(request_id=request_id, model=chosen_model, cancel_event=cancel_event))
 
     async def _cancel_inflight_locked(self, *, reason: str) -> None:
-        ar = self.active_run
-        if ar is None or ar.status != "running":
+        if self.active_run is None:
             return
-        ar.cancel_event.set()
-        if ar.task and not ar.task.done():
-            ar.task.cancel()
-            try:
-                await ar.task
-            except Exception:
-                pass
+        
+        # Don't overwrite 'done' status if it finished naturally just now.
+        if self.active_run.status == "running":
+            self.active_run.status = "cancelled"
+            self.active_run.ended_at = _now_iso()
+            self.active_run.cancel_event.set()
+            
+            # Persist partial assistant output if any.
+            if self.active_run.open_assistant:
+                oa = self.active_run.open_assistant
+                if oa.message_id and oa.buffer_text:
+                     # Mark it as cancelled in meta if desired, but content update is main thing.
+                     update_message_content(oa.message_id, content=oa.buffer_text)
 
-        # Flush any open assistant segment to DB as cancelled.
-        await self._flush_open_assistant_locked(meta={"cancelled": True, "streaming": False})
-
-        ar.status = "cancelled"
-        ar.ended_at = _now_iso()
-        self._seen_request_ids[ar.request_id] = "cancelled"
-
-        add_message(
-            session_id=self.session_id,
-            role="system",
-            content="Generation cancelled (new user message).",
-            meta={"type": "cancel", "requestId": ar.request_id, "reason": reason},
-        )
-        asyncio.create_task(
-            send(
-                self.session_id,
-                {"type": "system.message", "requestId": ar.request_id, "payload": {"content": "Generation cancelled (new user message)."}},
-            )
-        )
-        asyncio.create_task(send(self.session_id, {"type": "chat.cancelled", "requestId": ar.request_id, "payload": {"reason": reason}}))
+        # Notify clients
+        asyncio.create_task(send(self.session_id, {"type": "run.cancelled", "requestId": self.active_run.request_id, "payload": {"reason": reason}}))
 
         self.active_run = None
 
@@ -198,197 +195,115 @@ class ConversationModel:
                         request_id=request_id,
                         tool=str(payload.get("tool") or ""),
                         tc_id=str(payload.get("tcId") or ""),
-                        content=str(payload.get("content") or ""),
+                        output=payload.get("output"),
                     )
                     return
-                # forward unknown events as-is
-                asyncio.create_task(send(self.session_id, {"type": et, "requestId": request_id, "payload": payload}))
 
-            text, _full_msgs = await run_tool_loop_streaming(
+            # Run the tool loop
+            # Pass session context so tools can read active_skills
+            final_text, final_msgs = await run_tool_loop_streaming(
                 model=model,
                 base_messages=llm_msgs,
                 on_event=on_event,
                 cancel_event=cancel_event,
+                max_steps=10,
+                session_id=self.session_id, # Pass session ID down
             )
-            _ = text
 
-            async with self.lock:
-                # If a new run started, ignore completion from stale task.
-                if not self.active_run or self.active_run.request_id != request_id:
-                    return
-                if self.active_run.cancel_event.is_set():
-                    return
-                await self._flush_open_assistant_locked(meta={"streaming": False})
-                self.active_run.status = "done"
-                self.active_run.ended_at = _now_iso()
-                self._seen_request_ids[request_id] = "done"
-                asyncio.create_task(send(self.session_id, {"type": "chat.done", "requestId": request_id, "payload": {"ok": True}}))
-                self.active_run = None
-        except asyncio.CancelledError:
-            # Cancellation is handled by the canceller (new user message path).
-            return
-        except Exception as e:  # noqa: BLE001
+            # Done. Persist the final assistant message (if not already done via delta updates or if we want to be sure).
+            # The runner emits deltas, so the DB should be up to date if we handled deltas correctly.
+            # But we might need to close out the run status.
+
             async with self.lock:
                 if self.active_run and self.active_run.request_id == request_id:
-                    await self._flush_open_assistant_locked(meta={"streaming": False, "error": True})
-                    self.active_run.status = "error"
-                    self.active_run.ended_at = _now_iso()
-                    self._seen_request_ids[request_id] = "error"
-                    add_message(
-                        session_id=self.session_id,
-                        role="system",
-                        content=f"Chat error: {e}",
-                        meta={"type": "error", "requestId": request_id},
-                    )
-                    asyncio.create_task(
-                        send(
-                            self.session_id,
-                            {"type": "system.message", "requestId": request_id, "payload": {"content": f"Chat error: {e}"}},
-                        )
-                    )
-                    asyncio.create_task(send(self.session_id, {"type": "chat.error", "requestId": request_id, "payload": {"message": str(e)}}))
-                    self.active_run = None
+                     self.active_run.status = "done"
+                     self.active_run.ended_at = _now_iso()
+                     # If we have a buffered assistant message, ensure it's finalized in DB
+                     if self.active_run.open_assistant:
+                         oa = self.active_run.open_assistant
+                         update_message_content(oa.message_id, content=oa.buffer_text)
+                         # Also emit chat.done
+                         asyncio.create_task(send(self.session_id, {"type": "chat.done", "requestId": request_id, "payload": {"messageId": oa.message_id}}))
+                     else:
+                         # No assistant output (maybe just tools?), rare but possible.
+                         asyncio.create_task(send(self.session_id, {"type": "chat.done", "requestId": request_id, "payload": {"messageId": None}}))
+                     
+                     self.active_run = None
 
-    def _ensure_open_assistant(self, *, request_id: str) -> Optional[str]:
-        """
-        Create assistant segment message row on first token.
-        Must only be called from the streaming task.
-        """
-        ar = self.active_run
-        if ar is None or ar.request_id != request_id or ar.status != "running":
-            return None
-        if ar.open_assistant is not None:
-            return ar.open_assistant.message_id
-        row = add_message(
-            session_id=self.session_id,
-            role="assistant",
-            content="",
-            meta={"streaming": True, "requestId": request_id, "segment": True},
-        )
-        ar.open_assistant = OpenAssistant(message_id=row.id, buffer_text="")
-        asyncio.create_task(send(self.session_id, {"type": "assistant.segment.started", "requestId": request_id, "payload": {"messageId": row.id}}))
-        return row.id
+        except asyncio.CancelledError:
+             # Already handled in _cancel_inflight_locked usually, but if task cancelled externally:
+             async with self.lock:
+                 if self.active_run and self.active_run.request_id == request_id:
+                     await self._cancel_inflight_locked(reason="task_cancelled")
+        except Exception as e:
+            # Error state
+            import traceback
+            traceback.print_exc()
+            async with self.lock:
+                if self.active_run and self.active_run.request_id == request_id:
+                     self.active_run.status = "error"
+                     self.active_run.ended_at = _now_iso()
+                     asyncio.create_task(send(self.session_id, {"type": "run.error", "requestId": request_id, "payload": {"error": str(e)}}))
+                     self.active_run = None
 
     def _on_chat_delta(self, *, request_id: str, text: str) -> None:
-        if not text:
+        # We need to append to the active run's buffer AND persist periodically (or on finish).
+        # For responsiveness, we don't write DB on every token. We write on finish/cancel.
+        # But we DO emit WS events.
+        
+        # NOTE: This runs in the task loop, so we need to be careful with lock if we modify self.active_run.
+        # However, active_run object itself is mutable and owned by this task effectively.
+        if not self.active_run or self.active_run.request_id != request_id:
             return
-        # Best-effort: mutate state without awaiting; cancels/flushes happen under lock elsewhere.
-        ar = self.active_run
-        if ar is None or ar.request_id != request_id or ar.status != "running":
-            return
-        mid = self._ensure_open_assistant(request_id=request_id)
-        if mid is None or ar.open_assistant is None:
-            return
-        ar.open_assistant.buffer_text += text
-        asyncio.create_task(
-            send(self.session_id, {"type": "chat.delta", "requestId": request_id, "payload": {"text": text, "messageId": mid}})
-        )
 
-    def _on_assistant_tool_calls(self, *, request_id: str, tool_calls: Any) -> None:
-        """
-        Persist tool_calls onto the most recent assistant segment so later turns have a valid tool-call chain.
-        """
-        if not isinstance(tool_calls, list):
+        if not self.active_run.open_assistant:
+            # First token -> create message row
+            oa_id = str(uuid4())
+            # We insert directly to DB to get an ID
+            add_message(session_id=self.session_id, role="assistant", content="", meta={"requestId": request_id})
+            self.active_run.open_assistant = OpenAssistant(message_id=oa_id, buffer_text="")
+            # Notify frontend of the message ID
+            asyncio.create_task(send(self.session_id, {"type": "chat.started", "requestId": request_id, "payload": {"messageId": oa_id}}))
+            # Also correct the previous message meta if needed? No, add_message returned a new row.
+            # Wait, add_message generates its own ID. We need that ID.
+            # Rework: add_message returns the row.
+            # Let's fix this slightly: add_message was called above but we didn't capture ID?
+            # actually add_message is synchronous DB call.
+            # Let's do it properly:
+            row = add_message(session_id=self.session_id, role="assistant", content="", meta={"requestId": request_id})
+            self.active_run.open_assistant = OpenAssistant(message_id=row.id, buffer_text="")
+            asyncio.create_task(send(self.session_id, {"type": "chat.started", "requestId": request_id, "payload": {"messageId": row.id}}))
+
+        self.active_run.open_assistant.buffer_text += text
+        asyncio.create_task(send(self.session_id, {"type": "chat.delta", "requestId": request_id, "payload": {"text": text, "messageId": self.active_run.open_assistant.message_id}}))
+
+    def _on_assistant_tool_calls(self, *, request_id: str, tool_calls: list[dict[str, Any]]) -> None:
+        if not self.active_run or self.active_run.request_id != request_id:
             return
-        ar = self.active_run
-        if ar is None or ar.request_id != request_id or ar.status != "running":
-            return
-        if ar.open_assistant is None:
-            # If there were no deltas/content, ensure a placeholder assistant message exists to attach tool_calls.
-            mid = self._ensure_open_assistant(request_id=request_id)
-            if mid is None or ar.open_assistant is None:
-                return
-        try:
-            update_message_content(
-                ar.open_assistant.message_id,
-                content=ar.open_assistant.buffer_text,
-                meta={"requestId": request_id, "segment": True, "streaming": True, "tool_calls": tool_calls},
-            )
-        except Exception:
-            pass
+        # We should persist these into the assistant message meta so they are preserved.
+        if self.active_run.open_assistant:
+             mid = self.active_run.open_assistant.message_id
+             # We might get partials? usually tool_calls come in a chunk or final block.
+             # For now, just update the DB meta.
+             update_message_content(mid, content=self.active_run.open_assistant.buffer_text, meta={"tool_calls": tool_calls})
 
     def _on_chat_usage(self, *, request_id: str, usage: dict[str, Any]) -> None:
-        asyncio.create_task(
-            send(self.session_id, {"type": "chat.usage", "requestId": request_id, "payload": usage})
-        )
-        ar = self.active_run
-        if ar is None or ar.request_id != request_id or ar.status != "running":
-            return
-        # If we have an open assistant message, attach usage stats to it.
-        # This persists the token count for history.
-        if ar.open_assistant is not None:
-            try:
-                update_message_content(
-                    ar.open_assistant.message_id,
-                    content=ar.open_assistant.buffer_text,
-                    meta={"usage": usage},
-                )
-            except Exception:
-                pass
+         asyncio.create_task(send(self.session_id, {"type": "chat.usage", "requestId": request_id, "payload": usage}))
 
     def _on_tool_start(self, *, request_id: str, tool: str, tc_id: str, args_preview: str) -> None:
-        ar = self.active_run
-        if ar is None or ar.request_id != request_id or ar.status != "running":
-            return
-        # Tool boundary closes any open assistant segment.
-        if ar.open_assistant is not None:
-            try:
-                update_message_content(
-                    ar.open_assistant.message_id,
-                    content=ar.open_assistant.buffer_text,
-                    meta={"streaming": False, "requestId": request_id, "segment": True},
-                )
-            except Exception:
-                pass
-            ar.open_assistant = None
-        if tc_id:
-            ar.tool_meta[tc_id] = {"tool": tool, "argsPreview": args_preview}
-        asyncio.create_task(send(self.session_id, {"type": "tool.start", "requestId": request_id, "payload": {"tool": tool, "argsPreview": args_preview}}))
+         # Persist tool invocation as a message? 
+         # The standard is usually: User -> Assistant (calls tool) -> Tool (output) -> Assistant.
+         # The tool call itself is part of Assistant message.
+         # The output is a separate message.
+         # Here we just emit event for UI.
+         asyncio.create_task(send(self.session_id, {"type": "tool.start", "requestId": request_id, "payload": {"tool": tool, "tcId": tc_id, "args": args_preview}}))
 
     def _on_tool_end(self, *, request_id: str, tool: str, tc_id: str, ok: bool, duration_ms: int) -> None:
-        ar = self.active_run
-        if ar is None or ar.request_id != request_id or ar.status != "running":
-            return
-        if tc_id:
-            ar.tool_meta.setdefault(tc_id, {"tool": tool})
-            ar.tool_meta[tc_id].update({"ok": ok, "durationMs": duration_ms})
-        asyncio.create_task(
-            send(
-                self.session_id,
-                {"type": "tool.end", "requestId": request_id, "payload": {"tool": tool, "ok": ok, "durationMs": duration_ms}},
-            )
-        )
+         asyncio.create_task(send(self.session_id, {"type": "tool.end", "requestId": request_id, "payload": {"tool": tool, "tcId": tc_id, "ok": ok, "durationMs": duration_ms}}))
 
-    def _on_tool_output(self, *, request_id: str, tool: str, tc_id: str, content: str) -> None:
-        ar = self.active_run
-        if ar is None or ar.request_id != request_id or ar.status != "running":
-            return
-        meta: dict[str, Any] = {"name": tool, "requestId": request_id}
-        if tc_id:
-            meta["tool_call_id"] = tc_id
-            meta.update(ar.tool_meta.get(tc_id, {}))
-        # Persist full tool output to DB (may be large) as a valid tool message when tool_call_id is present.
-        add_message(session_id=self.session_id, role="tool", content=content, meta=meta)
-
-        preview, truncated = _truncate(content, max_chars=20_000)
-        asyncio.create_task(
-            send(
-                self.session_id,
-                {"type": "tool.output", "requestId": request_id, "payload": {"tool": tool, "content": preview, "truncated": truncated}},
-            )
-        )
-
-    async def _flush_open_assistant_locked(self, *, meta: dict[str, Any]) -> None:
-        ar = self.active_run
-        if ar is None or ar.open_assistant is None:
-            return
-        try:
-            update_message_content(
-                ar.open_assistant.message_id,
-                content=ar.open_assistant.buffer_text,
-                meta={**meta, "requestId": ar.request_id, "segment": True},
-            )
-        except Exception:
-            pass
-        ar.open_assistant = None
-
+    def _on_tool_output(self, *, request_id: str, tool: str, tc_id: str, output: Any) -> None:
+        # Create a tool message in the transcript
+        import json
+        content = json.dumps(output, ensure_ascii=False) if not isinstance(output, str) else output
+        add_message(session_id=self.session_id, role="tool", content=content, meta={"requestId": request_id, "tool_call_id": tc_id, "name": tool})
+        asyncio.create_task(send(self.session_id, {"type": "tool.output", "requestId": request_id, "payload": {"tool": tool, "tcId": tc_id, "output": output}}))

@@ -1,15 +1,13 @@
-type Item = 'explorer' | 'sessions' | 'chat' | 'kanban' | 'settings'
+type Item = 'explorer' | 'sessions' | 'pending' | 'settings' | 'chat'
 
 export function ActivityBar(props: {
   active: Item
   onSelect: (item: Item) => void
 }) {
   const items: { id: Item; label: string; icon: string }[] = [
-    { id: 'explorer', label: 'Explorer', icon: '☰' },
+    { id: 'explorer', label: 'Explorer', icon: '❐' },
     { id: 'sessions', label: 'Sessions', icon: '⎘' },
-    { id: 'chat', label: 'Chat', icon: '✉' },
-    { id: 'kanban', label: 'Kanban', icon: '▦' },
-    { id: 'settings', label: 'Settings', icon: '⚙' },
+    { id: 'pending', label: 'Pending', icon: '◎' },
   ]
 
   return (

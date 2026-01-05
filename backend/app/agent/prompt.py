@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from datetime import datetime
 
 from app.agent.prelude import build_context_prelude
 
@@ -26,6 +27,27 @@ Tool Usage Tips:
 Runtime logs (for debugging):
 - Backend writes structured NDJSON logs under backend/data/logs/ (rotated daily, retained ~7 days).
 - You may consult these logs when debugging tool behavior, filesystem ops, or Notion sync.
+
+UI Widgets:
+You can render interactive widgets in the chat by using specific markdown code blocks.
+- Buttons: To ask the user to choose from a list or confirm an action.
+  ```widget:buttons
+  ["Option 1", "Option 2"]
+  ```
+  OR
+  ```widget:buttons
+  [{"label": "Yes", "value": "yes"}, {"label": "No", "value": "no"}]
+  ```
+
+- Select: To ask for a selection (single or multiple).
+  ```widget:select
+  { "title": "Pick files to delete", "options": ["/path/a", "/path/b"], "multiple": true }
+  ```
+
+- File Embed: To show a file's content inline (read-only).
+  ```widget:file
+  { "path": "/fs/mnt/workspace/README.md" }
+  ```
 """
 
 
@@ -87,7 +109,8 @@ async def ensure_system_prompt_async(messages: list[dict[str, Any]], session_id:
     if rest and rest[0].get("role") == "system" and str(rest[0].get("content") or "").startswith(PRELUDE_MARKER):
         rest = rest[1:]
 
-    prelude = await build_context_prelude(session_id=session_id)
+    now_str = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+    prelude = f"Current Date/Time: {now_str}\n\n" + await build_context_prelude(session_id=session_id)
     if prelude.strip():
         rest = [{"role": "system", "content": PRELUDE_MARKER + prelude}, *rest]
 

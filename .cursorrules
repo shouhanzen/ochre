@@ -53,3 +53,12 @@ This script handles:
 - `backend/app/fs/skills.py`: Skill definitions and mixins.
 - `backend/app/todos/`: Todo logic (markdown parsing/rendering).
 - `plan.md`: Architectural resilience plan for the chat system.
+
+### Debugging & Test-Driven Development
+When bisecting complex bugs, especially those involving frontend/backend interaction or race conditions, follow this TDD process:
+
+1.  **Create Reproduction Test:** Write a Playwright test (e.g., `frontend/e2e/tests/repro_issue.desktop.spec.ts`) that asserts the *correct* behavior.
+2.  **Verify Failure:** Run the test to confirm it fails (`npx playwright test e2e/tests/repro_issue.desktop.spec.ts`). This confirms the bug is reproduced.
+3.  **Diagnose & Fix:** Analyze logs/traces, apply fixes to the codebase.
+4.  **Verify Fix:** Run the test again to confirm it passes.
+5.  **Cleanup:** Delete the temporary reproduction test file (unless it is valuable as a permanent regression test).

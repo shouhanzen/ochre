@@ -75,6 +75,10 @@ async def post_chat(session_id: str, body: ChatBody) -> StreamingResponse:
             for k in ("name", "tool_call_id", "tool_calls"):
                 if k in m:
                     meta[k] = m[k]
+            
+            if "args" in m:
+                meta["argsPreview"] = str(m["args"])
+
             add_message(session_id=session_id, role=role, content=content, meta=meta)
 
         # Stream final assistant content in chunks.

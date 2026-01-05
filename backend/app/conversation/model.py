@@ -195,7 +195,7 @@ class ConversationModel:
                         request_id=request_id,
                         tool=str(payload.get("tool") or ""),
                         tc_id=str(payload.get("tcId") or ""),
-                        output=payload.get("output"),
+                        output=payload.get("output") or payload.get("content"),
                     )
                     return
 
@@ -296,7 +296,10 @@ class ConversationModel:
          # The tool call itself is part of Assistant message.
          # The output is a separate message.
          # Here we just emit event for UI.
-         asyncio.create_task(send(self.session_id, {"type": "tool.start", "requestId": request_id, "payload": {"tool": tool, "tcId": tc_id, "args": args_preview}}))
+         if self.active_run and self.active_run.request_id == request_id:
+             self.active_run.tool_meta[tc_id] = {"argsPreview": args_preview}
+         
+         asyncio.create_task(send(self.session_id, {"type": "tool.start", "requestId": request_id, "payload": {"tool": tool, "tcId": tc_id, "argsPreview": args_preview}}))
 
     def _on_tool_end(self, *, request_id: str, tool: str, tc_id: str, ok: bool, duration_ms: int) -> None:
          asyncio.create_task(send(self.session_id, {"type": "tool.end", "requestId": request_id, "payload": {"tool": tool, "tcId": tc_id, "ok": ok, "durationMs": duration_ms}}))
@@ -305,5 +308,12 @@ class ConversationModel:
         # Create a tool message in the transcript
         import json
         content = json.dumps(output, ensure_ascii=False) if not isinstance(output, str) else output
-        add_message(session_id=self.session_id, role="tool", content=content, meta={"requestId": request_id, "tool_call_id": tc_id, "name": tool})
+        
+        meta = {"requestId": request_id, "tool_call_id": tc_id, "name": tool}
+        if self.active_run and self.active_run.request_id == request_id:
+            tm = self.active_run.tool_meta.get(tc_id)
+            if tm and "argsPreview" in tm:
+                meta["argsPreview"] = tm["argsPreview"]
+
+        add_message(session_id=self.session_id, role="tool", content=content, meta=meta)
         asyncio.create_task(send(self.session_id, {"type": "tool.output", "requestId": request_id, "payload": {"tool": tool, "tcId": tc_id, "output": output}}))

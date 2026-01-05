@@ -77,6 +77,7 @@ async def run_agent(
                     "tool_call_id": tc_id,
                     "name": name,
                     "content": content,
+                    "args": raw_args,
                 }
             )
 

@@ -468,11 +468,14 @@ To prevent clogging the inbox:
 
         # Determine target folder
         # We only support moving to: inbox, starred, archive
-        # parts_to: [acct, folder, filename]
-        if len(parts_to) != 3:
+        # parts_to: [acct, folder, filename] OR [acct, folder] (if moving to directory)
+        target_folder = ""
+        if len(parts_to) == 3:
+            target_folder = parts_to[1]
+        elif len(parts_to) == 2:
+            target_folder = parts_to[1]
+        else:
              raise RuntimeError("Target must be one of: inbox, starred, archive")
-        
-        target_folder = parts_to[1]
         
         add_ids = []
         remove_ids = []

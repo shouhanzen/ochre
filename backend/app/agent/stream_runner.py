@@ -59,7 +59,12 @@ async def stream_once(
             for tc in delta["tool_calls"]:
                 idx = tc.get("index")
                 if idx is None:
-                    continue
+                    # Fallback for missing index: if we have exactly one active tool call, assign to it.
+                    if len(tool_calls) == 1:
+                        idx = list(tool_calls.keys())[0]
+                    else:
+                        continue
+
                 slot = tool_calls.setdefault(int(idx), {"id": None, "type": "function", "function": {"name": None, "arguments": ""}})
                 if "id" in tc and tc["id"]:
                     slot["id"] = tc["id"]
@@ -121,6 +126,7 @@ async def run_tool_loop_streaming(
                 fn = tc.get("function") or {}
                 name = str(fn.get("name") or "")
                 raw_args = fn.get("arguments") or "{}"
+
                 args: dict[str, Any]
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
@@ -145,7 +151,7 @@ async def run_tool_loop_streaming(
                 # Emit tool output as a separate transcript event (may be large).
                 on_event({"type": "tool.output", "payload": {"tool": name, "tcId": tc_id, "content": content}})
 
-                msgs.append({"role": "tool", "tool_call_id": tc_id, "name": name, "content": content})
+                msgs.append({"role": "tool", "tool_call_id": tc_id, "name": name, "content": content, "args": raw_args})
         
         else:
             # No tool calls -> we are done

@@ -598,8 +598,10 @@ async def _fs_write(args: dict[str, Any]) -> Any:
 
 async def _fs_move(args: dict[str, Any]) -> Any:
     # 'fromPath' and 'toPath' can be str or list[str]
-    from_arg = args.get("fromPath")
-    to_arg = args.get("toPath")
+    from_arg = args.get("fromPath") or args.get("from_path")
+    to_arg = args.get("toPath") or args.get("to_path")
+    if not from_arg or not to_arg:
+         raise ValueError("Missing fromPath or toPath argument")
     if not from_arg or not to_arg:
          raise ValueError("Missing fromPath or toPath argument")
     return fs_move(from_arg, to_arg)

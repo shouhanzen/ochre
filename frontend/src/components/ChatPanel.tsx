@@ -5,6 +5,7 @@ import { SessionSocket, type WsFrame } from '../ws'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { type ChatMsg, parseToolPills, ToolList } from './ChatTools'
+import { WidgetButtons, WidgetFile, WidgetSelect } from './Widgets'
 
 function formatTokenCount(n: any): string {
   const num = Number(n)
@@ -103,14 +104,38 @@ function groupRenderItems(msgs: ChatMsg[]): RenderItem[] {
   return out
 }
 
-function Markdown({ text }: { text: string }) {
+function Markdown({ text, onSend }: { text: string; onSend: (t: string) => void }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
         a: (props) => <a {...props} target="_blank" rel="noreferrer" />,
         pre: (props) => <pre className="mdPre" {...props} />,
-        code: ({ className, ...props }) => <code className={`mdCode ${className ?? ''}`} {...props} />,
+        code: ({ className, children, ...props }) => {
+          const match = /language-widget:(\w+)/.exec(className || '')
+          if (match) {
+            const widgetType = match[1]
+            try {
+              const content = String(children).replace(/\n$/, '')
+              const config = JSON.parse(content)
+              if (widgetType === 'buttons') return <WidgetButtons config={config} onSend={onSend} />
+              if (widgetType === 'select') return <WidgetSelect config={config} onSend={onSend} />
+              if (widgetType === 'file') return <WidgetFile config={config} />
+            } catch (e) {
+              console.error('Widget parse error', e)
+              return (
+                <code className={`mdCode ${className ?? ''}`} {...props}>
+                  {children}
+                </code>
+              )
+            }
+          }
+          return (
+            <code className={`mdCode ${className ?? ''}`} {...props}>
+              {children}
+            </code>
+          )
+        },
       }}
     >
       {text}
@@ -398,7 +423,8 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
         }
       } else if (f.type === 'tool.output') {
         const tool = String(f.payload?.tool ?? 'tool')
-        const c = String(f.payload?.content ?? '')
+        // 'content' might be missing if backend sends 'output' key.
+        const c = String(f.payload?.content ?? f.payload?.output ?? '')
         const tcId = f.payload?.tcId ? String(f.payload.tcId) : null
         
         // If we have a tcId, update the existing message. If not, append a new one (legacy fallback).
@@ -555,7 +581,7 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
                   ) : null}
                 </div>
                 <div className="chatContent md">
-                  <Markdown text={m.content} />
+                  <Markdown text={m.content} onSend={onSend} />
                 </div>
               </div>
             )

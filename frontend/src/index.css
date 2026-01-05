@@ -63,9 +63,12 @@ body {
   /* The visualViewport height already shrinks for the keyboard; extra padding here creates a “dead” strip above the keyboard. */
   padding-bottom: 0;
 }
-.mobileMain > .panel {
+.mobileMain > .panel,
+.mobileMain > .editorRegion {
   flex: 1;
   min-height: 0;
+  width: 100%;
+  overflow: hidden;
 }
 .mobileShell input,
 .mobileShell textarea,

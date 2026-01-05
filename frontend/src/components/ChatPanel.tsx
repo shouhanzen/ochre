@@ -4,16 +4,7 @@ import { getSession, type SessionMessage } from '../sessionApi'
 import { SessionSocket, type WsFrame } from '../ws'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-
-type ChatMsg = {
-  id?: string
-  role: 'user' | 'assistant' | 'system' | 'tool'
-  content: string
-  ts?: string
-  kind?: 'normal' | 'pending'
-  requestId?: string
-  meta?: Record<string, unknown>
-}
+import { type ChatMsg, parseToolPills, ToolList } from './ChatTools'
 
 function formatTokenCount(n: any): string {
   const num = Number(n)
@@ -94,162 +85,6 @@ type RenderItem =
   | { kind: 'msg'; msg: ChatMsg; key: string }
   | { kind: 'tools'; msgs: ChatMsg[]; key: string }
 
-type ToolPill = {
-  name: string
-  status?: 'ok' | 'error'
-  durationMs?: number
-  argsPreview?: string
-  outputPreview?: string
-  rawLines: string[]
-}
-
-function makeUuidV4FromRandomBytes(bytes: Uint8Array): string {
-  // RFC 4122 version 4 + variant bits
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
-function safeRandomUUID(): { id: string; method: 'randomUUID' | 'getRandomValues' | 'fallback' } {
-  const c = (globalThis as any).crypto as Crypto | undefined
-  if (c && typeof (c as any).randomUUID === 'function') {
-    return { id: (c as any).randomUUID(), method: 'randomUUID' }
-  }
-  if (c && typeof c.getRandomValues === 'function') {
-    const bytes = new Uint8Array(16)
-    c.getRandomValues(bytes)
-    return { id: makeUuidV4FromRandomBytes(bytes), method: 'getRandomValues' }
-  }
-  // Last resort (not cryptographically strong): still unique enough for request correlation in UI.
-  return { id: `r-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`, method: 'fallback' }
-}
-
-function _safeJsonPreview(s: string): string | null {
-  const t = s.trim()
-  if (!t.startsWith('{') && !t.startsWith('[')) return null
-  try {
-    const obj = JSON.parse(t) as any
-    if (obj && typeof obj === 'object') {
-      if (typeof obj.ok === 'boolean') {
-        if (obj.ok === false) {
-          const err = obj.error
-          if (typeof err === 'string') return err
-          if (err && typeof err === 'object') {
-            if (typeof err.message === 'string') return err.message
-            if (typeof err.code === 'string') return err.code
-          }
-          return 'error'
-        }
-        if ('result' in obj) {
-          const r = obj.result
-          if (r == null) return 'ok'
-          if (typeof r === 'string') return r.slice(0, 140)
-          if (typeof r === 'object') {
-            const keys = Object.keys(r).slice(0, 6)
-            return keys.length ? `result: { ${keys.join(', ')} }` : 'result: {}'
-          }
-          return `result: ${String(r).slice(0, 140)}`
-        }
-        return 'ok'
-      }
-    }
-    return null
-  } catch {
-    return null
-  }
-}
-
-function parseToolPills(toolMsgs: ChatMsg[]): ToolPill[] {
-  // New format: persisted tool result messages with meta.tool_call_id + meta.ok/durationMs/argsPreview.
-  const structured = toolMsgs.some((m) => !!(m.meta && (m.meta as any)['tool_call_id']))
-  if (structured) {
-    const pills: ToolPill[] = []
-    for (const m of toolMsgs) {
-      const meta: any = m.meta ?? {}
-      const tcId = typeof meta.tool_call_id === 'string' ? meta.tool_call_id : null
-      if (!tcId) continue
-      const name = (typeof meta.name === 'string' && meta.name) || 'tool'
-      const ok = typeof meta.ok === 'boolean' ? meta.ok : undefined
-      const durationMs = typeof meta.durationMs === 'number' ? meta.durationMs : undefined
-      const argsPreview = typeof meta.argsPreview === 'string' ? meta.argsPreview : undefined
-      const outPreview = _safeJsonPreview(m.content ?? '')
-      pills.push({
-        name,
-        status: ok == null ? undefined : ok ? 'ok' : 'error',
-        durationMs,
-        argsPreview,
-        outputPreview: outPreview ?? undefined,
-        rawLines: [m.content ?? ''],
-      })
-    }
-    return pills
-  }
-
-  const pills: ToolPill[] = []
-  const startRe = /^▶\s+(\S+)\s*(.*)$/
-  const endRe = /^■\s+(\S+)\s+(ok|error)\s+\((\d+)ms\)$/
-
-  for (let i = 0; i < toolMsgs.length; i++) {
-    const m = toolMsgs[i]
-    const line = m.content ?? ''
-    const metaName = (m.meta?.['name'] as string | undefined) ?? ''
-
-    const start = startRe.exec(line)
-    if (start) {
-      const name = start[1] || metaName || 'tool'
-      const args = (start[2] ?? '').trim() || undefined
-      const pill: ToolPill = { name, argsPreview: args, rawLines: [line] }
-
-      const next = toolMsgs[i + 1]
-      if (next) {
-        const end = endRe.exec(next.content ?? '')
-        if (end && end[1] === name) {
-          pill.status = end[2] as 'ok' | 'error'
-          pill.durationMs = Number(end[3])
-          pill.rawLines.push(next.content ?? '')
-          i++
-
-          const maybeOut = toolMsgs[i + 1]
-          if (maybeOut) {
-            const outName = (maybeOut.meta?.['name'] as string | undefined) ?? ''
-            const outPreview = _safeJsonPreview(maybeOut.content ?? '')
-            if (outPreview && (!outName || outName === name)) {
-              pill.outputPreview = outPreview
-              pill.rawLines.push(maybeOut.content ?? '')
-              i++
-            }
-          }
-        }
-      }
-
-      pills.push(pill)
-      continue
-    }
-
-    const end = endRe.exec(line)
-    if (end) {
-      pills.push({
-        name: end[1] || metaName || 'tool',
-        status: end[2] as 'ok' | 'error',
-        durationMs: Number(end[3]),
-        rawLines: [line],
-      })
-      continue
-    }
-
-    const outPreview = _safeJsonPreview(line)
-    if (outPreview) {
-      pills.push({ name: metaName || 'tool', outputPreview: outPreview, rawLines: [line] })
-      continue
-    }
-
-    pills.push({ name: metaName || 'tool', rawLines: [line] })
-  }
-
-  return pills
-}
-
 function groupRenderItems(msgs: ChatMsg[]): RenderItem[] {
   const out: RenderItem[] = []
   let i = 0
@@ -295,6 +130,22 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
   const [error, setError] = useState<string | null>(null)
   const [sock, setSock] = useState<SessionSocket | null>(null)
   const [copied, setCopied] = useState(false)
+
+  const chatLogRef = useRef<HTMLDivElement | null>(null)
+  const shouldAutoScrollRef = useRef(true)
+
+  const handleScroll = () => {
+    if (!chatLogRef.current) return
+    const { scrollTop, scrollHeight, clientHeight } = chatLogRef.current
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50
+    shouldAutoScrollRef.current = isAtBottom
+  }
+
+  // Initial scroll to bottom on load
+  useEffect(() => {
+    shouldAutoScrollRef.current = true
+    bottomRef.current?.scrollIntoView({ block: 'end' })
+  }, [props.sessionId])
 
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const streamingAssistantIdxRef = useRef<number | null>(null)
@@ -364,7 +215,16 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
           }
         }
 
-        setMessages(chatMsgs)
+        setMessages((prev) => {
+          const serverRequestIds = new Set(chatMsgs.map((m) => m.requestId).filter(Boolean))
+          const pending = prev.filter((m) => {
+            if (m.role !== 'user') return false
+            if (!m.requestId) return false
+            if (serverRequestIds.has(m.requestId)) return false
+            return true
+          })
+          return [...chatMsgs, ...pending]
+        })
         const ar = view?.activeRun
         if (ar && ar.status === 'running' && typeof ar.requestId === 'string') {
           activeRequestIdRef.current = ar.requestId
@@ -421,7 +281,9 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
           copy.push({ role: 'assistant', content: text, ts: new Date().toISOString(), kind: 'normal', requestId: rid, id: mid ?? undefined })
           return copy
         })
-        bottomRef.current?.scrollIntoView({ block: 'end' })
+        if (shouldAutoScrollRef.current) {
+            bottomRef.current?.scrollIntoView({ block: 'end' })
+        }
       } else if (f.type === 'chat.started') {
         setStreaming(true)
         setConnecting(false)
@@ -487,39 +349,92 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
       } else if (f.type === 'tool.start') {
         const tool = String(f.payload?.tool ?? 'tool')
         const args = String(f.payload?.argsPreview ?? '')
-        const line = args ? `▶ ${tool} ${args}` : `▶ ${tool}`
+        const tcId = f.payload?.tcId ? String(f.payload.tcId) : `tc-${Date.now()}-${Math.random()}`
+        
+        // Structured approach: use meta for everything, empty content
         setMessages((prev) => [
           ...prev,
-          { role: 'tool', content: line, ts: new Date().toISOString(), requestId: String(f.requestId ?? activeRequestIdRef.current ?? ''), kind: 'normal' },
+          { 
+            role: 'tool', 
+            content: '', // content empty for structured tools
+            ts: new Date().toISOString(), 
+            requestId: String(f.requestId ?? activeRequestIdRef.current ?? ''), 
+            kind: 'normal',
+            meta: { 
+              tool_call_id: tcId,
+              name: tool,
+              argsPreview: args
+            }
+          },
         ])
-        bottomRef.current?.scrollIntoView({ block: 'end' })
+        if (shouldAutoScrollRef.current) {
+            bottomRef.current?.scrollIntoView({ block: 'end' })
+        }
       } else if (f.type === 'tool.end') {
         const tool = String(f.payload?.tool ?? 'tool')
         const ok = !!f.payload?.ok
         const ms = Number(f.payload?.durationMs ?? 0)
-        const line = `■ ${tool} ${ok ? 'ok' : 'error'} (${ms}ms)`
-        setMessages((prev) => [
-          ...prev,
-          { role: 'tool', content: line, ts: new Date().toISOString(), requestId: String(f.requestId ?? activeRequestIdRef.current ?? ''), kind: 'normal' },
-        ])
-        bottomRef.current?.scrollIntoView({ block: 'end' })
+        const tcId = f.payload?.tcId ? String(f.payload.tcId) : null
+        
+        setMessages((prev) => {
+          if (!tcId) return prev
+          const copy = prev.slice()
+          const idx = copy.findIndex(m => m.role === 'tool' && (m.meta as any)?.tool_call_id === tcId)
+          if (idx >= 0) {
+            copy[idx] = {
+              ...copy[idx],
+              meta: {
+                ...copy[idx].meta,
+                ok,
+                durationMs: ms
+              }
+            }
+            return copy
+          }
+          return prev
+        })
+        if (shouldAutoScrollRef.current) {
+            bottomRef.current?.scrollIntoView({ block: 'end' })
+        }
       } else if (f.type === 'tool.output') {
         const tool = String(f.payload?.tool ?? 'tool')
         const c = String(f.payload?.content ?? '')
-        const note = f.payload?.truncated ? '\n\n(truncated in live stream; reload to see full output)' : ''
-        const line = c ? c + note : '(tool output)'
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'tool',
-            content: line,
-            ts: new Date().toISOString(),
-            requestId: String(f.requestId ?? activeRequestIdRef.current ?? ''),
-            kind: 'normal',
-            meta: { name: tool },
-          },
-        ])
-        bottomRef.current?.scrollIntoView({ block: 'end' })
+        const tcId = f.payload?.tcId ? String(f.payload.tcId) : null
+        
+        // If we have a tcId, update the existing message. If not, append a new one (legacy fallback).
+        if (tcId) {
+             setMessages((prev) => {
+              const copy = prev.slice()
+              const idx = copy.findIndex(m => m.role === 'tool' && (m.meta as any)?.tool_call_id === tcId)
+              if (idx >= 0) {
+                // We store the output in the content field now, but keep the meta structure
+                copy[idx] = {
+                  ...copy[idx],
+                  content: c
+                }
+                return copy
+              }
+              return prev
+            })
+        } else {
+             // Fallback for legacy / untracked tools
+            const note = f.payload?.truncated ? '\n\n(truncated in live stream; reload to see full output)' : ''
+            const line = c ? c + note : '(tool output)'
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: 'tool',
+                content: line,
+                ts: new Date().toISOString(),
+                requestId: String(f.requestId ?? activeRequestIdRef.current ?? ''),
+                kind: 'normal',
+                meta: { name: tool },
+              },
+            ])
+        }
+        if (shouldAutoScrollRef.current) {
+            bottomRef.current?.scrollIntoView({ block: 'end' })
+        }
       }
     })
     s.connect()
@@ -531,8 +446,8 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
     if (streaming) return
     if (!props.sessionId) return
     setError(null)
-    const userMsg: ChatMsg = { role: 'user', content: content.trim(), ts: new Date().toISOString() }
-    const { id: requestId } = safeRandomUUID()
+    const requestId = crypto.randomUUID()
+    const userMsg: ChatMsg = { role: 'user', content: content.trim(), ts: new Date().toISOString(), requestId }
     waitingForStartedRef.current = requestId
     waitingForFirstTokenRef.current = null
     activeRequestIdRef.current = requestId
@@ -615,7 +530,7 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
         </div>
       </div>
 
-      <div className="chatLog">
+      <div className="chatLog" ref={chatLogRef} onScroll={handleScroll}>
         {!props.sessionId ? <div className="muted">Initializing session…</div> : null}
         {messages.length === 0 ? (
           <div className="muted">Ask the agent to view/edit `/fs/todos/today.todo.md` or `/fs/mnt/workspace/...`.</div>
@@ -653,25 +568,7 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
                 <span className="toolGroupTitle">Tools</span>
                 <span className="toolGroupCount">{pills.length}</span>
               </summary>
-              <div className="toolPills">
-                {pills.map((p, idx) => (
-                  <details key={idx} className="toolPill">
-                    <summary className="toolPillSummary">
-                      <span className="toolPillName">{p.name}</span>
-                      {p.status ? <span className={`toolPillStatus ${p.status}`}>{p.status}</span> : null}
-                      {typeof p.durationMs === 'number' ? <span className="toolPillMs">{p.durationMs}ms</span> : null}
-                    </summary>
-                    <div className="toolPillBody">
-                      {p.argsPreview ? <div className="toolPillRow"><span className="muted">args</span><pre className="toolPillPre">{p.argsPreview}</pre></div> : null}
-                      {p.outputPreview ? <div className="toolPillRow"><span className="muted">output</span><pre className="toolPillPre">{p.outputPreview}</pre></div> : null}
-                      <div className="toolPillRow">
-                        <span className="muted">raw</span>
-                        <pre className="toolPillPre">{p.rawLines.join('\n')}</pre>
-                      </div>
-                    </div>
-                  </details>
-                ))}
-              </div>
+              <ToolList pills={pills} />
             </details>
           )
         })}
@@ -706,6 +603,3 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
     </div>
   )
 }
-
-
-

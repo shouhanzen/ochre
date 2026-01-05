@@ -626,76 +626,106 @@ body {
   display: inline-flex;
   align-items: center;
 }
-.toolPills {
+.toolList {
   padding: 8px 10px 10px 10px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
 }
-.toolPill {
+.toolItem {
   border: 1px solid var(--vscode-border);
-  border-radius: 999px;
+  border-radius: 4px;
   background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
 }
-.toolPillSummary {
-  list-style: none;
+.toolItem.expanded {
+  background: rgba(255, 255, 255, 0.05);
+}
+.toolHeader {
   cursor: pointer;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  user-select: none;
 }
-.toolPillSummary::-webkit-details-marker {
-  display: none;
+.toolHeader:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
-.toolPillName {
-  color: var(--vscode-foreground);
+.toolIcon {
+  font-size: 10px;
+  color: var(--vscode-foreground-muted);
+  width: 14px;
+}
+.toolName {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-weight: 500;
+  color: var(--vscode-foreground);
+  flex: 1;
 }
-.toolPillStatus {
+.toolStatus {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 10px;
   border: 1px solid var(--vscode-border);
   color: var(--vscode-foreground-muted);
 }
-.toolPillStatus.ok {
+.toolStatus.ok {
   color: #89d185;
   border-color: rgba(137, 209, 133, 0.35);
 }
-.toolPillStatus.error {
+.toolStatus.error {
   color: #f14c4c;
   border-color: rgba(241, 76, 76, 0.35);
 }
-.toolPillMs {
+.toolDuration {
   color: var(--vscode-foreground-faint);
   font-size: 11px;
-}
-.toolPillBody {
-  width: min(720px, calc(100vw - 120px));
-  padding: 10px 12px 12px 12px;
-  border-top: 1px solid var(--vscode-border);
-  border-radius: 0 0 12px 12px;
-}
-.toolPillRow {
-  margin-top: 8px;
-  display: grid;
-  grid-template-columns: 52px 1fr;
-  gap: 10px;
-  align-items: start;
-}
-.toolPillPre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 12px;
-  line-height: 1.35;
-  background: rgba(0, 0, 0, 0.22);
-  border: 1px solid var(--vscode-border-subtle);
-  border-radius: 4px;
-  padding: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.toolBody {
+  border-top: 1px solid var(--vscode-border);
+  background: var(--vscode-editor-background);
+}
+.toolTabs {
+  display: flex;
+  border-bottom: 1px solid var(--vscode-border);
+  background: var(--vscode-sideBar-background);
+}
+.toolTab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--vscode-border-subtle);
+  color: var(--vscode-foreground-muted);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.toolTab:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.toolTab.active {
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  border-top: 1px solid var(--vscode-focusBorder);
+  margin-top: -1px; /* overlap border */
+}
+
+.toolContent {
+  padding: 10px;
+  overflow-x: auto;
+}
+.toolContent pre {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--vscode-foreground);
 }
 .chatLineHeader {
   display: flex;

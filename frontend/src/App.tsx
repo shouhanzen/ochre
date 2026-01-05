@@ -192,6 +192,35 @@ export default function App() {
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
   const [browseMode, setBrowseMode] = useState<BrowseMode>('files')
 
+  const [rightPanelWidth, setRightPanelWidth] = useState(420)
+  const isResizingRightRef = useRef(false)
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isResizingRightRef.current) return
+      // Calculate new width relative to right edge of window
+      const newWidth = document.body.clientWidth - e.clientX
+      // Clamp between 300px and 1200px
+      const w = Math.max(300, Math.min(newWidth, 1200))
+      setRightPanelWidth(w)
+    }
+
+    const onUp = () => {
+      if (isResizingRightRef.current) {
+        isResizingRightRef.current = false
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [])
+
   useEffect(() => {
     try {
       localStorage.setItem(OPEN_FILES_KEY, JSON.stringify(openFiles))
@@ -475,7 +504,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="vscodeMain">
+      <div className="vscodeMain" style={{ gridTemplateColumns: `48px 300px minmax(0, 1fr) ${rightPanelWidth}px` }}>
         <ActivityBar
           active={activeRail}
           onSelect={(id) => {
@@ -516,6 +545,15 @@ export default function App() {
         </div>
 
         <div className="rightPanel">
+          <div
+            className="resizeHandle"
+            onMouseDown={(e) => {
+              isResizingRightRef.current = true
+              document.body.style.cursor = 'col-resize'
+              document.body.style.userSelect = 'none'
+              e.preventDefault()
+            }}
+          />
           <ChatPanel sessionId={sessionId} onNewConversation={newConversation} />
         </div>
       </div>

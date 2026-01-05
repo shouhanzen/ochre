@@ -242,6 +242,23 @@ body {
   position: relative; /* For floating chat composer */
 }
 
+/* Resize handle */
+.resizeHandle {
+  position: absolute;
+  left: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.1s;
+}
+.resizeHandle:hover,
+.resizeHandle.active {
+  background: var(--vscode-focusBorder);
+}
+
 /* Make primary panes fill vertical space like VS Code */
 .sideBar > .panel {
   flex: 1;
@@ -254,12 +271,10 @@ body {
   border: 0;
 }
 .rightPanel > .panel {
+  flex: 1;
   border-left: 0;
   border-right: 0;
   border-top: 0;
-}
-.rightPanel > .panel:first-child {
-  flex: 1;
 }
 
 .statusBar {

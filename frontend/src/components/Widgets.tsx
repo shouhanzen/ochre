@@ -1,4 +1,8 @@
 import { useState, useEffect } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { fsRead, fsWrite } from '../api'
+import { TodoFileView } from './TodoFileView'
 
 export interface WidgetProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -85,10 +89,13 @@ export function WidgetFile({ config }: { config: any }) {
   // Config: { path: string, startLine?: number, endLine?: number }
   const [content, setContent] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
 
   const path = config.path as string
+  const isTodo = path.endsWith('.todo.md') || path.endsWith('.md.todo')
+  const isMarkdown = path.endsWith('.md') && !isTodo
   
   // Reset state if path changes
   useEffect(() => {
@@ -96,25 +103,40 @@ export function WidgetFile({ config }: { config: any }) {
     setExpanded(false)
     setError(null)
     setLoading(false)
+    setSaving(false)
   }, [path])
 
-  const toggleExpand = () => {
+  const toggleExpand = async () => {
     if (!expanded && content === null && !loading) {
       setLoading(true)
-      fetch(`/api/fs/read?path=${encodeURIComponent(path)}`)
-        .then(async (res) => {
-          if (!res.ok) throw new Error(await res.text())
-          const data = await res.json()
-          setContent(data.content || '')
-        })
-        .catch(e => {
-          setError(String(e))
-        })
-        .finally(() => {
-          setLoading(false)
-        })
+      try {
+        const res = await fsRead(path)
+        setContent(res.content || '')
+      } catch (e) {
+        setError(String(e))
+      } finally {
+        setLoading(false)
+      }
     }
     setExpanded(!expanded)
+  }
+
+  const handleWrite = async (next: string) => {
+    setSaving(true)
+    setError(null)
+    try {
+      await fsWrite(path, next)
+      setContent(next)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleInitEmpty = async () => {
+    const template = `# Todos\n\n- [ ] Example task\n`
+    await handleWrite(template)
   }
 
   return (
@@ -142,6 +164,20 @@ export function WidgetFile({ config }: { config: any }) {
             <div style={{ padding: '12px', color: 'var(--fg-muted)' }}>Loading...</div>
           ) : error ? (
             <div style={{ padding: '12px', color: 'var(--red)' }}>Error: {error}</div>
+          ) : isTodo && content !== null ? (
+            <TodoFileView
+              path={path}
+              content={content}
+              saving={saving}
+              onWrite={handleWrite}
+              onInitEmpty={handleInitEmpty}
+            />
+          ) : isMarkdown && content !== null ? (
+            <div className="editorArea" style={{ padding: '12px', overflow: 'auto', maxHeight: '300px', fontSize: '13px' }}>
+              <div className="chatContent md">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+              </div>
+            </div>
           ) : (
             <pre style={{ margin: 0, padding: '12px', overflow: 'auto', maxHeight: '300px', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
               <code>{content}</code>

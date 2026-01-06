@@ -36,9 +36,13 @@ Tasks use markdown checkboxes:
 - `- [x] Task text`: Completed task
 
 ## Instructions
-1. **Read**: Use `fs_read` to see current tasks.
-2. **Update**: Use `fs_write` with the full file content to update checkboxes or add items.
-3. **Notes**: You can add notes under a `## Notes` section at the bottom.
+1. **Interactive UI**: When the user asks to see their todos, ALWAYS display the interactive widget:
+   ```widget:file
+   { "path": "/fs/todos/today.todo.md" }
+   ```
+2. **Read**: Use `fs_read` to check content programmatically if you need to summarize or search.
+3. **Update**: Use `fs_write` with the full file content to update checkboxes or add items programmatically.
+4. **Notes**: You can add notes under a `## Notes` section at the bottom.
 """,
             )
         ]

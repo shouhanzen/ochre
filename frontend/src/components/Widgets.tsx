@@ -175,7 +175,14 @@ export function WidgetFile({ config }: { config: any }) {
           ) : isMarkdown && content !== null ? (
             <div className="editorArea" style={{ padding: '12px', overflow: 'auto', maxHeight: '300px', fontSize: '13px' }}>
               <div className="chatContent md">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    pre: (props) => <pre className="mdPre" {...props} />,
+                  }}
+                >
+                  {content}
+                </ReactMarkdown>
               </div>
             </div>
           ) : (

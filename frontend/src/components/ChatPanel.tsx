@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { getSession, type SessionMessage } from '../sessionApi'
 import { SessionSocket, type WsFrame } from '../ws'
@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { type ChatMsg, parseToolPills, ToolList } from './ChatTools'
 import { WidgetButtons, WidgetFile, WidgetSelect } from './Widgets'
+import { ChatComposer } from './ChatComposer'
 
 function formatTokenCount(n: any): string {
   const num = Number(n)
@@ -95,7 +96,7 @@ function groupRenderItems(msgs: ChatMsg[]): RenderItem[] {
       const start = i
       while (i < msgs.length && msgs[i].role === 'tool') i++
       const chunk = msgs.slice(start, i)
-      out.push({ kind: 'tools', msgs: chunk, key: `tools-${start}-${i}` })
+      out.push({ kind: 'tools', msgs: chunk, key: `tools-${start}` })
       continue
     }
     out.push({ kind: 'msg', msg: m, key: `msg-${i}` })
@@ -143,35 +144,20 @@ function Markdown({ text, onSend }: { text: string; onSend: (t: string) => void 
   )
 }
 
-import { ChatComposer } from './ChatComposer'
-
 export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mobile'; onNewConversation?: () => Promise<void> | void }) {
   const isMobile = props.variant === 'mobile'
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [streaming, setStreaming] = useState(false)
-  const streamingRef = useRef(false)
   const [connecting, setConnecting] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sock, setSock] = useState<SessionSocket | null>(null)
   const [copied, setCopied] = useState(false)
 
+  const streamingRef = useRef(false)
   const chatLogRef = useRef<HTMLDivElement | null>(null)
   const shouldAutoScrollRef = useRef(true)
-
-  const handleScroll = () => {
-    if (!chatLogRef.current) return
-    const { scrollTop, scrollHeight, clientHeight } = chatLogRef.current
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50
-    shouldAutoScrollRef.current = isAtBottom
-  }
-
-  // Initial scroll to bottom on load
-  useEffect(() => {
-    shouldAutoScrollRef.current = true
-    bottomRef.current?.scrollIntoView({ block: 'end' })
-  }, [props.sessionId])
-
+  const restoreScrollTopRef = useRef<number | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const streamingAssistantIdxRef = useRef<number | null>(null)
   const pendingIdxRef = useRef<number | null>(null)
@@ -179,6 +165,18 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
   const pendingRequestIdRef = useRef<string | null>(null)
   const waitingForStartedRef = useRef<string | null>(null)
   const waitingForFirstTokenRef = useRef<string | null>(null)
+
+  const handleScroll = () => {
+    if (!chatLogRef.current) return
+    const { scrollTop, scrollHeight, clientHeight } = chatLogRef.current
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50
+    shouldAutoScrollRef.current = isAtBottom
+
+    if (props.sessionId) {
+      const state = { scrollTop, wasAtBottom: isAtBottom }
+      sessionStorage.setItem(`ochre_chat_scroll_${props.sessionId}`, JSON.stringify(state))
+    }
+  }
 
   useEffect(() => {
     streamingRef.current = streaming
@@ -194,10 +192,49 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
      return allRenderItems.slice(allRenderItems.length - 10)
   }, [allRenderItems])
 
+  useLayoutEffect(() => {
+    // Attempt to restore scroll position if we have a pending restore
+    if (restoreScrollTopRef.current !== null && chatLogRef.current) {
+      chatLogRef.current.scrollTop = restoreScrollTopRef.current
+      restoreScrollTopRef.current = null
+      return
+    }
+
+    if (shouldAutoScrollRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    }
+  }, [renderedItems, connecting, pending])
+
   useEffect(() => {
     const sid = props.sessionId
     if (!sid) return
+    
+    setMessages([])
     setError(null)
+
+    // Check for saved scroll state
+    try {
+      const saved = sessionStorage.getItem(`ochre_chat_scroll_${sid}`)
+      if (saved) {
+        const state = JSON.parse(saved)
+        if (state && typeof state.scrollTop === 'number') {
+          if (state.wasAtBottom) {
+             shouldAutoScrollRef.current = true
+             restoreScrollTopRef.current = null
+          } else {
+             shouldAutoScrollRef.current = false
+             restoreScrollTopRef.current = state.scrollTop
+          }
+        }
+      } else {
+        shouldAutoScrollRef.current = true
+        restoreScrollTopRef.current = null
+      }
+    } catch {
+      shouldAutoScrollRef.current = true
+      restoreScrollTopRef.current = null
+    }
+
     ;(async () => {
       try {
         const res = await getSession(sid)
@@ -306,9 +343,6 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
           copy.push({ role: 'assistant', content: text, ts: new Date().toISOString(), kind: 'normal', requestId: rid, id: mid ?? undefined })
           return copy
         })
-        if (shouldAutoScrollRef.current) {
-            bottomRef.current?.scrollIntoView({ block: 'end' })
-        }
       } else if (f.type === 'chat.started') {
         setStreaming(true)
         setConnecting(false)
@@ -392,11 +426,7 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
             }
           },
         ])
-        if (shouldAutoScrollRef.current) {
-            bottomRef.current?.scrollIntoView({ block: 'end' })
-        }
       } else if (f.type === 'tool.end') {
-        const tool = String(f.payload?.tool ?? 'tool')
         const ok = !!f.payload?.ok
         const ms = Number(f.payload?.durationMs ?? 0)
         const tcId = f.payload?.tcId ? String(f.payload.tcId) : null
@@ -418,9 +448,6 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
           }
           return prev
         })
-        if (shouldAutoScrollRef.current) {
-            bottomRef.current?.scrollIntoView({ block: 'end' })
-        }
       } else if (f.type === 'tool.output') {
         const tool = String(f.payload?.tool ?? 'tool')
         // 'content' might be missing if backend sends 'output' key.
@@ -457,9 +484,6 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
                 meta: { name: tool },
               },
             ])
-        }
-        if (shouldAutoScrollRef.current) {
-            bottomRef.current?.scrollIntoView({ block: 'end' })
         }
       }
     })
@@ -529,6 +553,12 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
     }
   }
 
+  const quickStarts = [
+    { label: 'Sort emails', prompt: 'Please help me sort through my emails. Check my inbox and summarize what needs attention.' },
+    { label: 'Check todos', prompt: 'Read /fs/todos/today.md and tell me what is on my plate for today.' },
+    { label: 'Capabilities', prompt: 'What can you do? List your available tools and skills.' },
+  ]
+
   return (
     <div className="panel">
       <div className="panelHeader">
@@ -559,7 +589,21 @@ export function ChatPanel(props: { sessionId?: string; variant?: 'desktop' | 'mo
       <div className="chatLog" ref={chatLogRef} onScroll={handleScroll}>
         {!props.sessionId ? <div className="muted">Initializing session…</div> : null}
         {messages.length === 0 ? (
-          <div className="muted">Ask the agent to view/edit `/fs/todos/today.todo.md` or `/fs/mnt/workspace/...`.</div>
+          <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', gap: '20px', alignItems: 'center', justifyContent: 'center', opacity: 0.8 }}>
+             <div className="muted" style={{ fontSize: '14px' }}>How can I help you today?</div>
+             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                 {quickStarts.map((qs) => (
+                     <button
+                         key={qs.label}
+                         className="button secondary"
+                         onClick={() => void onSend(qs.prompt)}
+                         style={{ padding: '8px 16px', borderRadius: '100px', fontSize: '13px' }}
+                     >
+                         {qs.label}
+                     </button>
+                 ))}
+             </div>
+           </div>
         ) : null}
         {messages.length > 0 && renderedItems.length < allRenderItems.length ? (
             <div className="muted" style={{ marginBottom: 10, textAlign: 'center' }}>
